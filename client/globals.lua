@@ -38,4 +38,13 @@ CurrentRaceData = {
     Position = 0,
     Ghosted = false,
     Drift = false,
+    RandomVehicleSwapping = false,
+    RandomVehicleCategories = {},
+    NoSameRandomVehicle = false,
+    NoSameRandomCategory = false,
+    UniqueRandomCategory = false,
+    UsedRandomCategories = {},
+    SharedRandomCategories = false,
+    SharedCategorySequence = {},
+    SharedCategorySequenceIndex = 0,
 }

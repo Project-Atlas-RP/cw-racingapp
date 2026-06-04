@@ -25,6 +25,7 @@ client_scripts {
     'client/classes.lua',
     'client/globals.lua',
     'client/functions.lua',
+    'client/checkpoint_lamps.lua',
     'client/main.lua',
     'client/gui.lua',
     'client/head2head.lua',

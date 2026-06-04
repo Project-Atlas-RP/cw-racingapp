@@ -9,8 +9,15 @@ NotFinished = {}
 Timers = {}
 local IsFirstUser = false
 
-local HostingIsAllowed = true
-local AutoHostIsAllowed = true
+-- Load persisted settings from KVP (default to true if not set)
+local function loadKvpBool(key, default)
+    local value = GetResourceKvpString(key)
+    if value == nil then return default end
+    return value == 'true'
+end
+
+local HostingIsAllowed = loadKvpBool('racingapp:hostingAllowed', true)
+local AutoHostIsAllowed = loadKvpBool('racingapp:autoHostAllowed', true)
 
 local DefaultTrackMetadata = {
     description = nil,
@@ -121,6 +128,12 @@ end
 
 local function handleRemoveMoney(src, moneyType, amount, racerName)
     if UseDebug then print('Attempting to charge', racerName, amount, moneyType) end
+    
+    -- If cost is 0, no need to charge anything
+    if amount <= 0 then
+        return true
+    end
+    
     if moneyType == 'racingcrypto' then
         if RacingCrypto.removeCrypto(racerName, amount) then
             NotifyHandler( src,
@@ -848,6 +861,39 @@ local function setupRace(setupData, src)
     local hidden = setupData.hidden
     local silent = setupData.silent
     local drift = setupData.drift
+    local randomVehicleSwapping = setupData.randomVehicleSwapping or false
+    local randomVehicleCategories = setupData.randomVehicleCategories or {}
+    local noSameRandomVehicle = setupData.noSameRandomVehicle or false
+    local noSameRandomCategory = setupData.noSameRandomCategory or false
+    local uniqueRandomCategory = setupData.uniqueRandomCategory or false
+    local sharedRandomCategories = setupData.sharedRandomCategories or false
+
+    if src then
+        -- getActiveRacerName returns the full racer_names row, not a string. Pull
+        -- auth off it directly; passing the row to getUserAuth would land it in
+        -- oxmysql's parameter slot and get interpreted as named params.
+        local activeRacerRow = RADB.getActiveRacerName(getCitizenId(src))
+        local activeRacerAuth = (activeRacerRow and activeRacerRow.auth)
+            or RADB.getUserAuth(racerName)
+            or Config.BasePermission
+        local activeRacerPermissions = Config.Permissions[activeRacerAuth] or {}
+
+        if not activeRacerPermissions.adminMenu then
+            randomVehicleSwapping = false
+            randomVehicleCategories = {}
+            noSameRandomVehicle = false
+            noSameRandomCategory = false
+            uniqueRandomCategory = false
+            sharedRandomCategories = false
+        end
+    end
+
+    if not randomVehicleSwapping then
+        noSameRandomVehicle = false
+        noSameRandomCategory = false
+        uniqueRandomCategory = false
+        sharedRandomCategories = false
+    end
                          
     if not HostingIsAllowed then
         if src then NotifyHandler( src, Lang("hosting_not_allowed"), 'error') end
@@ -900,6 +946,12 @@ local function setupRace(setupData, src)
                 Races[raceId].FirstPerson = firstPerson
                 Races[raceId].Hidden = hidden
                 Races[raceId].Drift = drift
+                Races[raceId].RandomVehicleSwapping = randomVehicleSwapping
+                Races[raceId].RandomVehicleCategories = randomVehicleCategories
+                Races[raceId].NoSameRandomVehicle = noSameRandomVehicle
+                Races[raceId].NoSameRandomCategory = noSameRandomCategory
+                Races[raceId].UniqueRandomCategory = uniqueRandomCategory
+                Races[raceId].SharedRandomCategories = sharedRandomCategories
                 Races[raceId].ParticipationAmount = tonumber(participationAmount)
                 Races[raceId].ParticipationCurrency = participationCurrency
                 Races[raceId].ExpirationTime = expirationTime
@@ -925,6 +977,12 @@ local function setupRace(setupData, src)
                     ExpirationTime = expirationTime,
                     Hidden = hidden,
                     Drift = drift,
+                    RandomVehicleSwapping = randomVehicleSwapping,
+                    RandomVehicleCategories = randomVehicleCategories,
+                    NoSameRandomVehicle = noSameRandomVehicle,
+                    NoSameRandomCategory = noSameRandomCategory,
+                    UniqueRandomCategory = uniqueRandomCategory,
+                    SharedRandomCategories = sharedRandomCategories,
                 }
                 AvailableRaces[#AvailableRaces + 1] = allRaceData
                 if not automated then
@@ -941,8 +999,24 @@ local function setupRace(setupData, src)
                 RaceResults[raceId] = { Data = cleanedRaceData, Result = {} }
 
                 if Config.NotifyRacers and not silent then
-                    TriggerClientEvent('cw-racingapp:client:notifyRacers', -1,
-                        'New Race Available')
+                    -- Only broadcast the "New Race Available" alert if no other
+                    -- race is currently waiting to start. Players holding a GPS
+                    -- already see the open race, so further setups stay quiet
+                    -- until the open list clears (races started or expired).
+                    local hasOtherWaitingRace = false
+                    for _, openRace in pairs(AvailableRaces) do
+                        if openRace.RaceId ~= raceId
+                            and openRace.RaceData
+                            and openRace.RaceData.Waiting
+                            and not openRace.RaceData.Started then
+                            hasOtherWaitingRace = true
+                            break
+                        end
+                    end
+                    if not hasOtherWaitingRace then
+                        TriggerClientEvent('cw-racingapp:client:notifyRacers', -1,
+                            'New Race Available')
+                    end
                 end
                 createTimeoutThread(raceId)
                 return raceId
@@ -1525,16 +1599,80 @@ local function createRacingName(source, citizenid, racerName, type, purchaseType
     if purchaseType and purchaseType.racingUserCosts and purchaseType.racingUserCosts[type] then
         cost = purchaseType.racingUserCosts[type]
     else
-        NotifyHandler( source,
-            'The user type you entered does not exist, defaulting to $1000', 'error')
+        TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'The user type you entered does not exist, defaulting to $1000', type = 'error' })
     end
 
-    if not handleRemoveMoney(source, purchaseType.moneyType, cost, creatorName) then return false end
+    -- Check if player already has a racer account with this citizenid
+    local existingUsers = RADB.getRaceUsersBelongingToCitizenId(citizenid)
+    
+    if existingUsers and #existingUsers > 0 then
+        -- Player already has an account - update the existing row
+        local existingUser = existingUsers[1] -- Get the first (and should be only) user
+        
+        -- Check if they're trying to upgrade to the same or lower auth
+        local authLevels = { racer = 1, creator = 2, master = 3, god = 4 }
+        local currentAuthLevel = authLevels[existingUser.auth] or 0
+        local newAuthLevel = authLevels[type] or 0
+        
+        if newAuthLevel <= currentAuthLevel then
+            TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'You already have this permission level or higher!', type = 'error' })
+            return false
+        end
+        
+        -- Check if the new name is already taken by someone else
+        local nameCheck = RADB.getRaceUserByName(racerName)
+        if nameCheck and nameCheck.citizenid ~= citizenid then
+            TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'This racer name is already taken!', type = 'error' })
+            return false
+        end
+        
+        -- Charge the player for the upgrade
+        if not handleRemoveMoney(source, purchaseType.moneyType, cost, creatorName) then 
+            TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'You cannot afford this! ($' .. cost .. ')', type = 'error' })
+            return false 
+        end
+        
+        -- Update the racer name and auth level in the database
+        RADB.updateRaceUserNameAndAuth(existingUser.racername, racerName, type)
+        
+        -- Give the player a racing GPS if they don't already have one
+        local gpsItemName = Config.ItemName.gps or 'racing_gps'
+        local targetSrc = tonumber(targetSource) or source
+        local hasGps = exports.ox_inventory:Search(targetSrc, 'count', gpsItemName)
+        if not hasGps or hasGps < 1 then
+            exports.ox_inventory:AddItem(targetSrc, gpsItemName, 1)
+            TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'Racer upgraded to "' .. racerName .. '" with ' .. type .. ' permissions! You received a Racing GPS.', type = 'success' })
+        else
+            TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'Racer upgraded to "' .. racerName .. '" with ' .. type .. ' permissions!', type = 'success' })
+        end
+        
+        -- Trigger client update
+        Wait(500)
+        TriggerClientEvent('cw-racingapp:client:updateRacerNames', tonumber(targetSource))
+        return true
+    end
+
+    -- No existing user, create a new one
+    if not handleRemoveMoney(source, purchaseType.moneyType, cost, creatorName) then 
+        TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'You cannot afford this! ($' .. cost .. ')', type = 'error' })
+        return false 
+    end
 
 
     local creatorCitizenId = 'unknown'
     if getCitizenId(source) then creatorCitizenId = getCitizenId(source) end
     addRacerName(citizenid, racerName, targetSource, type, creatorCitizenId)
+    
+    -- Give the player a racing GPS if they don't already have one
+    local gpsItemName = Config.ItemName.gps or 'racing_gps'
+    local targetSrc = tonumber(targetSource) or source
+    local hasGps = exports.ox_inventory:Search(targetSrc, 'count', gpsItemName)
+    if not hasGps or hasGps < 1 then
+        exports.ox_inventory:AddItem(targetSrc, gpsItemName, 1)
+        TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'Racer "' .. racerName .. '" created! You received a Racing GPS.', type = 'success' })
+    else
+        TriggerClientEvent('ox_lib:notify', source, { title = 'Racing', description = 'Racer "' .. racerName .. '" created successfully!', type = 'success' })
+    end
     return true
 end
 
@@ -1632,6 +1770,43 @@ RegisterNetEvent('cw-racingapp:server:createRacerName', function(playerId, racer
     end
 end)
 
+-- Buy a replacement Racing GPS — for racers who lost theirs. Cost + money type
+-- are read here from Config (never trusted from the client) by which buy point
+-- was used. Gated to players who already have a racing account, since creating
+-- an account already hands out a GPS; this is purely a replacement for a lost one.
+RegisterNetEvent('cw-racingapp:server:buyReplacementGps', function(purchaseSource)
+    local src = source
+    local cfg = (purchaseSource == 'laptop') and Config.Laptop or Config.Trader
+    if not cfg or not cfg.active then return end
+
+    local gpsItemName = Config.ItemName.gps or 'racing_gps'
+
+    -- It's a unique item — don't sell a duplicate to someone who still has one.
+    local gpsCount = exports.ox_inventory:Search(src, 'count', gpsItemName)
+    if gpsCount and gpsCount >= 1 then
+        TriggerClientEvent('ox_lib:notify', src, { title = 'Racing', description = 'You already have a Racing GPS.', type = 'error' })
+        return
+    end
+
+    -- Must already be a racer (people "who lost theirs"). New users get a GPS
+    -- for free when they create an account, so point them at that flow instead.
+    local citizenid = getCitizenId(src)
+    local existingUsers = citizenid and RADB.getRaceUsersBelongingToCitizenId(citizenid)
+    if not existingUsers or #existingUsers < 1 then
+        TriggerClientEvent('ox_lib:notify', src, { title = 'Racing', description = 'You need a racing account first — create one here.', type = 'error' })
+        return
+    end
+
+    local cost = tonumber(cfg.gpsCost) or 0
+    if not handleRemoveMoney(src, cfg.moneyType, cost, existingUsers[1].racername) then
+        TriggerClientEvent('ox_lib:notify', src, { title = 'Racing', description = 'You cannot afford this! ($' .. cost .. ')', type = 'error' })
+        return
+    end
+
+    exports.ox_inventory:AddItem(src, gpsItemName, 1)
+    TriggerClientEvent('ox_lib:notify', src, { title = 'Racing', description = 'You purchased a replacement Racing GPS.', type = 'success' })
+end)
+
 RegisterServerCallback('cw-racingapp:server:purchaseCrypto', function(source, racerName, cryptoAmount)
     local src = source
     local moneyToPay = math.floor((1.0 * cryptoAmount) / Config.Options.conversionRate)
@@ -1707,6 +1882,7 @@ RegisterServerCallback('cw-racingapp:server:toggleAutoHost', function(source)
     if not srcHasUserAccess(source,'handleAutoHost') then return end
     
     AutoHostIsAllowed = not AutoHostIsAllowed
+    SetResourceKvp('racingapp:autoHostAllowed', tostring(AutoHostIsAllowed))
     return AutoHostIsAllowed
 end)
 
@@ -1715,6 +1891,7 @@ RegisterServerCallback('cw-racingapp:server:toggleHosting', function(source)
     if not srcHasUserAccess(source, 'handleHosting') then return end
 
     HostingIsAllowed = not HostingIsAllowed
+    SetResourceKvp('racingapp:hostingAllowed', tostring(HostingIsAllowed))
     return HostingIsAllowed
 end)
 

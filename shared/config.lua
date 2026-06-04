@@ -25,7 +25,7 @@ Config.NotifyRacers = true              -- set to true and anyone holding a raci
 
 Config.UseOxLibForKeybind = true       -- YOU HAVE TO ENABLE OXLIB IN FXMANIFEST TO USE THIS!!!!!!!!!!!!!!!!!!!!!!!!! Use oxlib for keybinds instead of natives.
 Config.UseOxTarget = true              -- Require ox target. Obviously
-Config.OxInput = false                  -- If you want Oxlib input menus Same as above with fxmanifest ^
+Config.OxInput = true                   -- If you want Oxlib input menus Same as above with fxmanifest ^
 Config.OxLibNotify = true              -- If you want Oxlib notify Same as above with fxmanifest ^
 
 Config.LimitTopListTo = 10              -- If this is nil, the Racers Ranking will list all racers that exist, if set to a number it will limit to the top of that amount
@@ -91,7 +91,7 @@ Config.CustomAmounts = { -- custom max amout of racer names
 }
 
 Config.LimitTracks = true        -- set to true to limit tracks per citizenid. Below two fields are irrelevent if this is false
-Config.MaxCharacterTracks = 2    -- Amount of tracks allowed per citizenid
+Config.MaxCharacterTracks = 100  -- Amount of tracks allowed per citizenid
 Config.CustomAmountsOfTracks = { -- custom max amout of tracks per citizenid
     ['PX6944'] = 100,
     ['FMN22732'] = 100,
@@ -201,6 +201,30 @@ Config.CheckpointPileModel =
 'xm_prop_base_tripod_lampa'                              --good alternative: 'prop_flare_01b' - comment this line out if you dont want entities for checkpoints
 Config.CheckpointBuffer = 1.0                            -- Distance (in meters) of how much outside of a checkpoints size (size is determined by the checkpoint edges) you can be to still pass it
 
+-- Checkpoint Lamps Configuration (uses bzzz_lights_and_lamps)
+-- These light props will only appear at night time and alternate colors between checkpoints
+Config.CheckpointLamps = {
+    enabled = true,                     -- Enable/disable checkpoint lamps
+    nightOnly = true,                   -- Only show lamps at night time
+    nightStartHour = 20,                -- Night starts at 8 PM (20:00)
+    nightEndHour = 6,                   -- Night ends at 6 AM (06:00)
+    
+    -- Color for start/finish line (green by default)
+    startFinishColor = 'bzzz_world_of_lamps_green',
+    
+    -- Alternating colors for regular checkpoints
+    -- Each checkpoint will use the next color in sequence
+    checkpointColors = {
+        'bzzz_world_of_lamps_blue',      -- 1st checkpoint
+        'bzzz_world_of_lamps_orange',    -- 2nd checkpoint
+        'bzzz_world_of_lamps_purple',    -- 3rd checkpoint
+        'bzzz_world_of_lamps_pink',      -- 4th checkpoint
+        'bzzz_world_of_lamps_yellow',    -- 5th checkpoint
+        'bzzz_world_of_lamps_red',       -- 6th checkpoint
+        'bzzz_world_of_lamps_white',     -- 7th checkpoint (then cycles back)
+    },
+}
+
 Config.Classes = {
     ['C'] = true,
     ['B'] = true,
@@ -306,6 +330,7 @@ Config.Trader = {
         master = 10000,
         god = 1000000
     },
+    gpsCost = 500, -- cost of a replacement Racing GPS for a racer who lost theirs (paid in moneyType)
     useSlimmed = true -- set to true if you want menu to cut out cid input
 }
 
@@ -314,14 +339,15 @@ Config.Laptop = {
     jobRequirement = { racer = false, creator = false, master = false, god = false }, -- Tied to Config.AllowedJobs
     requireToken = false,                                                         -- using cw tokens?
     model = 'xm_prop_x17_laptop_mrsr',                                            -- entity model
-    location = vector4(938.56, -1549.8, 34.37, 163.59),                           -- world location
+    location = vec4(-93.2, -2562.76, 5.09, 145.0),                           -- world location
     moneyType = Config.Payments.createRacingUser,                                                           -- cash/bank/crypto
     racingUserCosts = {                                                           -- cost of creating an account
-        racer = 0,
+        racer = 1000,
         creator = 5000,
-        master = 10000,
+        master = 25000,
         god = 1000000
     },
+    gpsCost = 500, -- cost of a replacement Racing GPS for a racer who lost theirs (paid in moneyType)
 }
 
 Config.Ghosting = {

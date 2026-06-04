@@ -213,6 +213,13 @@ export const testState = {
           value: "D",
         },
       ],
+      randomVehicleCategoryOptions: [
+        { text: "Compacts", value: "compacts" },
+        { text: "Coupes", value: "coupes" },
+        { text: "Muscle", value: "muscle" },
+        { text: "Sports", value: "sports" },
+        { text: "Super", value: "super" },
+      ],
       cryptoConversionRate: 0.01,
       cryptoType: "RAC",
       currentCrypto: 0,

@@ -7,13 +7,19 @@ end)
 -- Adds money to user
 function addMoney(src, moneyType, amount)
     local player = exports.qbx_core:GetPlayer(tonumber(src))
-    player.Functions.AddMoney(moneyType, math.floor(amount))
+    player.Functions.AddMoney(moneyType, math.floor(amount), 'cw-racingapp:winnings')
 end
 
 -- Removes money from user
 function removeMoney(src, moneyType, amount, reason)
     local player = exports.qbx_core:GetPlayer(tonumber(src))
-    return player.Functions.RemoveMoney(moneyType, math.floor(amount))
+    if not player then
+        print('[DEBUG] removeMoney: player is nil for src:', src)
+        return false
+    end
+    local result = player.Functions.RemoveMoney(moneyType, math.floor(amount), reason or 'cw-racingapp')
+    print('[DEBUG] removeMoney result:', result, 'src:', src, 'type:', moneyType, 'amount:', amount)
+    return result
 end
 
 -- Checks that user can pay

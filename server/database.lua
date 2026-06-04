@@ -181,6 +181,11 @@ local function setRaceUserAuth(racerName, auth)
         { auth, StrictSanitize(racerName) })
 end
 
+local function updateRaceUserNameAndAuth(oldRacerName, newRacerName, newAuth)
+    return MySQL.Sync.execute('UPDATE racer_names SET racername = ?, auth = ? WHERE racername = ?',
+        { StrictSanitize(newRacerName), newAuth, StrictSanitize(oldRacerName) })
+end
+
 local function wipeTracksTable()
     MySQL.query('DROP TABLE IF EXISTS race_tracks')
 end
@@ -303,6 +308,7 @@ RADB = {
     setCurationForTrack = setCurationForTrack,
     setRaceUserRevoked = setRaceUserRevoked,
     setRaceUserAuth = setRaceUserAuth,
+    updateRaceUserNameAndAuth = updateRaceUserNameAndAuth,
     setTrackCheckpoints = setTrackCheckpoints,
     updateEloForRaceResult = updateEloForRaceResult,
     updateRacerElo = updateRacerElo,

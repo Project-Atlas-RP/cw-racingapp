@@ -455,7 +455,13 @@ RegisterNUICallback('UiFetchCurrentRace', function(_, cb)
             ranked = CurrentRaceData.Ranked,
             reversed = CurrentRaceData.Reversed,
             hostName = CurrentRaceData.SetupRacerName,
-            drift = CurrentRaceData.Drift or false
+            drift = CurrentRaceData.Drift or false,
+            randomVehicleSwapping = CurrentRaceData.RandomVehicleSwapping or false,
+            randomVehicleCategories = CurrentRaceData.RandomVehicleCategories or {},
+            noSameRandomVehicle = CurrentRaceData.NoSameRandomVehicle or false,
+            noSameRandomCategory = CurrentRaceData.NoSameRandomCategory or false,
+            uniqueRandomCategory = CurrentRaceData.UniqueRandomCategory or false,
+            sharedRandomCategories = CurrentRaceData.SharedRandomCategories or false,
         }
         DebugLog('Current race', json.encode(data, { indent = true }))
         cb(data)
@@ -612,6 +618,8 @@ local function attemptSetupRace(setupData)
     local PlayerPed = PlayerPedId()
     local PlayerIsInVehicle = IsPedInAnyVehicle(PlayerPed, false)
     local vehicle = GetVehiclePedIsIn(PlayerPed, false)
+    local currentAuthConfig = Config.Permissions[CurrentAuth] or {}
+    local canUseRandomVehicleSwapping = currentAuthConfig.adminMenu == true
 
     if PlayerIsInVehicle and IsDriver(vehicle) then
         local class = getVehicleClass(GetVehiclePedIsIn(PlayerPed, false))
@@ -631,7 +639,13 @@ local function attemptSetupRace(setupData)
                 firstPerson = setupData.firstPerson,
                 silent = setupData.silent,
                 hidden = setupData.hidden,
-                drift = setupData.drift
+                drift = setupData.drift,
+                randomVehicleSwapping = canUseRandomVehicleSwapping and (setupData.randomVehicleSwapping or false) or false,
+                randomVehicleCategories = canUseRandomVehicleSwapping and (setupData.randomVehicleCategories or {}) or {},
+                noSameRandomVehicle = canUseRandomVehicleSwapping and (setupData.noSameRandomVehicle or false) or false,
+                noSameRandomCategory = canUseRandomVehicleSwapping and (setupData.noSameRandomCategory or false) or false,
+                uniqueRandomCategory = canUseRandomVehicleSwapping and (setupData.uniqueRandomCategory or false) or false,
+                sharedRandomCategories = canUseRandomVehicleSwapping and (setupData.sharedRandomCategories or false) or false,
             }
             local res = cwCallback.await('cw-racingapp:server:setupRace', data)
             return res

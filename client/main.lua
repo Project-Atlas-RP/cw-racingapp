@@ -15,6 +15,8 @@ StartAndFinishModel = joaat(Config.StartAndFinishModel)
 
 local startTime = 0
 local lapStartTime = 0
+local RandomRaceVehicleModels
+local RandomRaceVehicleCategoryOptions
 
 local CreatorData = {
     RaceName = nil,
@@ -195,6 +197,523 @@ local function loadModel(model)
     end
 end
 
+local function isAllowedRandomRaceVehicle(model)
+    if IsThisModelAHeli(model) or IsThisModelAPlane(model) then
+        return false
+    end
+
+    return IsThisModelACar(model) or IsThisModelABike(model) or IsThisModelAQuadbike(model) or
+        IsThisModelABicycle(model)
+end
+
+local function getSmallresourcesBlacklistedVehicles()
+    if GetResourceState('qbx_smallresources') ~= 'started' then
+        return {}
+    end
+
+    local success, blacklistedVehicles = pcall(function()
+        return exports.qbx_smallresources:GetBlacklistedVehicles()
+    end)
+
+    if not success or type(blacklistedVehicles) ~= 'table' then
+        DebugLog('Unable to read qbx_smallresources vehicle blacklist for random race vehicles')
+        return {}
+    end
+
+    return blacklistedVehicles
+end
+
+local function getRandomRaceVehicleModels()
+    if RandomRaceVehicleModels then
+        return RandomRaceVehicleModels
+    end
+
+    RandomRaceVehicleModels = {}
+    local blacklistedVehicles = getSmallresourcesBlacklistedVehicles()
+    local vehicles = exports.qbx_core:GetVehiclesByName()
+
+    for modelName, vehicleData in pairs(vehicles) do
+        local model = vehicleData.model or modelName
+        local hash = vehicleData.hash or joaat(model)
+        local category = vehicleData.category or 'other'
+        local isEligible = model and not blacklistedVehicles[hash] and IsModelInCdimage(hash) and
+            IsModelAVehicle(hash) and isAllowedRandomRaceVehicle(hash)
+
+        if isEligible then
+            RandomRaceVehicleModels[#RandomRaceVehicleModels + 1] = {
+                model = model,
+                hash = hash,
+                category = category,
+            }
+        end
+    end
+
+    return RandomRaceVehicleModels
+end
+
+local function formatRandomVehicleCategoryLabel(category)
+    local label = category:gsub('[_%-]+', ' ')
+    return (label:gsub('(%a)([%w]*)', function(first, rest)
+        return string.upper(first) .. string.lower(rest)
+    end))
+end
+
+local function getRandomRaceVehicleCategoryOptions()
+    if RandomRaceVehicleCategoryOptions then
+        return RandomRaceVehicleCategoryOptions
+    end
+
+    RandomRaceVehicleCategoryOptions = {}
+    local seenCategories = {}
+
+    for _, vehicleData in ipairs(getRandomRaceVehicleModels()) do
+        if vehicleData.category and not seenCategories[vehicleData.category] then
+            seenCategories[vehicleData.category] = true
+            RandomRaceVehicleCategoryOptions[#RandomRaceVehicleCategoryOptions + 1] = {
+                value = vehicleData.category,
+                text = formatRandomVehicleCategoryLabel(vehicleData.category),
+            }
+        end
+    end
+
+    table.sort(RandomRaceVehicleCategoryOptions, function(a, b)
+        return a.text < b.text
+    end)
+
+    return RandomRaceVehicleCategoryOptions
+end
+
+local function getFilteredRandomRaceVehicleModels(selectedCategories)
+    local availableVehicles = getRandomRaceVehicleModels()
+
+    if not selectedCategories or #selectedCategories == 0 then
+        return availableVehicles
+    end
+
+    local allowedCategories = {}
+    for _, category in ipairs(selectedCategories) do
+        allowedCategories[category] = true
+    end
+
+    local filteredVehicles = {}
+    for _, vehicleData in ipairs(availableVehicles) do
+        if allowedCategories[vehicleData.category] then
+            filteredVehicles[#filteredVehicles + 1] = vehicleData
+        end
+    end
+
+    if #filteredVehicles == 0 then
+        return availableVehicles
+    end
+
+    return filteredVehicles
+end
+
+local function requestControlOfEntity(entity, timeout)
+    local expiresAt = GetGameTimer() + (timeout or 1000)
+
+    while DoesEntityExist(entity) and not NetworkHasControlOfEntity(entity) and GetGameTimer() < expiresAt do
+        NetworkRequestControlOfEntity(entity)
+        Wait(0)
+    end
+
+    return not DoesEntityExist(entity) or NetworkHasControlOfEntity(entity)
+end
+
+local function giveKeysForRaceSwapVehicle(vehicle)
+    local expiresAt = GetGameTimer() + 4000
+    local netId = 0
+
+    while DoesEntityExist(vehicle) and netId == 0 and GetGameTimer() < expiresAt do
+        netId = NetworkGetNetworkIdFromEntity(vehicle)
+        if netId == 0 then
+            Wait(0)
+        end
+    end
+
+    if netId == 0 then
+        DebugLog('Failed to get network id for swapped race vehicle keys grant')
+        return false
+    end
+
+    local success = false
+    while DoesEntityExist(vehicle) and not success and GetGameTimer() < expiresAt do
+        success = lib.callback.await('qbx_vehiclekeys:server:giveKeys', false, netId)
+        if not success then
+            Wait(100)
+        end
+    end
+
+    if not success then
+        DebugLog('Failed to grant keys for swapped race vehicle', netId)
+    end
+
+    return success
+end
+
+local function repairRaceSwapVehicle(vehicle)
+    SetVehicleUndriveable(vehicle, false)
+    WashDecalsFromVehicle(vehicle, 1.0)
+    SetVehicleEngineHealth(vehicle, 1000.0)
+    SetVehicleBodyHealth(vehicle, 1000.0)
+    SetVehiclePetrolTankHealth(vehicle, 1000.0)
+    SetVehicleDirtLevel(vehicle, 0.0)
+    SetVehicleDeformationFixed(vehicle)
+    SetVehicleFixed(vehicle)
+
+    for i = 0, 5 do
+        SetVehicleTyreFixed(vehicle, i)
+    end
+
+    for i = 0, 7 do
+        FixVehicleWindow(vehicle, i)
+        if IsVehicleDoorDamaged(vehicle, i) then
+            SetVehicleDoorBroken(vehicle, i, false)
+        end
+        SetVehicleDoorCanBreak(vehicle, i, true)
+        SetVehicleDoorShut(vehicle, i, true)
+    end
+
+    SetVehicleFuelLevel(vehicle, 100.0)
+end
+
+local function setVehicleModToMax(vehicle, modType)
+    local maxMod = GetNumVehicleMods(vehicle, modType) - 1
+    if maxMod > -1 then
+        SetVehicleMod(vehicle, modType, maxMod, false)
+    end
+end
+
+local function setVehicleModToRandom(vehicle, modType)
+    local maxMod = GetNumVehicleMods(vehicle, modType) - 1
+    if maxMod > -1 then
+        SetVehicleMod(vehicle, modType, math.random(0, maxMod), false)
+    end
+end
+
+local function applyRaceSwapVehicleEffects(vehicle)
+    SetVehicleModKit(vehicle, 0)
+    repairRaceSwapVehicle(vehicle)
+
+    local bodyMods = { [0] = true, [1] = true, [2] = true, [3] = true, [4] = true, [5] = true, [6] = true, [7] = true, [8] = true, [9] = true, [10] = true }
+    for modType in pairs(bodyMods) do
+        setVehicleModToMax(vehicle, modType)
+    end
+
+    local maxEngine = GetNumVehicleMods(vehicle, 11) - 1
+    if maxEngine >= 2 then
+        SetVehicleMod(vehicle, 11, 2, false)
+    elseif maxEngine > -1 then
+        SetVehicleMod(vehicle, 11, maxEngine, false)
+    end
+
+    local maxBrakes = GetNumVehicleMods(vehicle, 12) - 1
+    if maxBrakes >= 1 then
+        SetVehicleMod(vehicle, 12, 1, false)
+    elseif maxBrakes > -1 then
+        SetVehicleMod(vehicle, 12, maxBrakes, false)
+    end
+
+    setVehicleModToMax(vehicle, 15)
+
+    local performanceMods = { [11] = true, [12] = true, [13] = true, [15] = true, [16] = true }
+    for modType = 0, 49 do
+        if not performanceMods[modType] and not bodyMods[modType] then
+            setVehicleModToRandom(vehicle, modType)
+        end
+    end
+
+    ToggleVehicleMod(vehicle, 17, true)
+    ToggleVehicleMod(vehicle, 18, true)
+    ToggleVehicleMod(vehicle, 20, true)
+    ToggleVehicleMod(vehicle, 21, true)
+    ToggleVehicleMod(vehicle, 22, true)
+    SetVehicleTyresCanBurst(vehicle, false)
+
+    local neonColors = {
+        { 255, 0, 0 },
+        { 0, 255, 0 },
+        { 0, 0, 255 },
+        { 255, 0, 255 },
+        { 255, 255, 0 },
+        { 0, 255, 255 },
+        { 255, 255, 255 },
+    }
+    local randomNeon = neonColors[math.random(#neonColors)]
+    SetVehicleNeonLightsColour(vehicle, randomNeon[1], randomNeon[2], randomNeon[3])
+
+    SetVehicleWindowTint(vehicle, math.random(0, 6))
+
+    local maxColor = 160
+    SetVehicleColours(vehicle, math.random(0, maxColor), math.random(0, maxColor))
+    SetVehicleExtraColours(vehicle, math.random(0, maxColor), math.random(0, maxColor))
+
+    local wheelTypes = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }
+    local randomWheelType = wheelTypes[math.random(#wheelTypes)]
+    SetVehicleWheelType(vehicle, randomWheelType)
+
+    local maxWheels = GetNumVehicleMods(vehicle, 23)
+    if maxWheels > 0 then
+        SetVehicleMod(vehicle, 23, math.random(0, maxWheels - 1), true)
+    end
+
+    SetVehicleNumberPlateTextIndex(vehicle, math.random(0, 5))
+
+    local maxLivery = GetNumVehicleMods(vehicle, 48) - 1
+    if maxLivery > -1 then
+        SetVehicleMod(vehicle, 48, math.random(0, maxLivery), false)
+    end
+
+    local maxHorn = GetNumVehicleMods(vehicle, 14) - 1
+    if maxHorn > -1 then
+        SetVehicleMod(vehicle, 14, math.random(0, maxHorn), false)
+    end
+end
+
+local function buildSharedCategorySequence()
+    local seen = {}
+    local categories = {}
+    local source = CurrentRaceData.RandomVehicleCategories
+    if source and #source > 0 then
+        for _, category in ipairs(source) do
+            if not seen[category] then
+                seen[category] = true
+                categories[#categories + 1] = category
+            end
+        end
+    else
+        for _, option in ipairs(getRandomRaceVehicleCategoryOptions()) do
+            if option.value and not seen[option.value] then
+                seen[option.value] = true
+                categories[#categories + 1] = option.value
+            end
+        end
+    end
+
+    -- Fisher-Yates: every racer shuffles their own copy independently so they
+    -- end up covering the same set of categories in a different order.
+    for i = #categories, 2, -1 do
+        local j = math.random(i)
+        categories[i], categories[j] = categories[j], categories[i]
+    end
+
+    return categories
+end
+
+local function swapToRandomRaceVehicle()
+    local ped = PlayerPedId()
+    local currentVehicle = GetVehiclePedIsIn(ped, false)
+
+    if currentVehicle == 0 or not IsDriver(currentVehicle) then
+        DebugLog('Skipping random race vehicle swap because racer is not driving')
+        return false
+    end
+
+    local availableVehicles = getFilteredRandomRaceVehicleModels(CurrentRaceData.RandomVehicleCategories)
+    if #availableVehicles == 0 then
+        DebugLog('No eligible random race vehicles available for swapping')
+        return false
+    end
+
+    local currentHash = GetEntityModel(currentVehicle)
+    local currentCategory
+    if CurrentRaceData.NoSameRandomVehicle or CurrentRaceData.NoSameRandomCategory then
+        for _, vehicleData in ipairs(getRandomRaceVehicleModels()) do
+            if vehicleData.hash == currentHash then
+                currentCategory = vehicleData.category
+                break
+            end
+        end
+    end
+
+    local function applyExclusions(pool, usedCategories)
+        local filtered = {}
+        for _, vehicleData in ipairs(pool) do
+            local sameVehicle = CurrentRaceData.NoSameRandomVehicle and vehicleData.hash == currentHash
+            local sameCategory = CurrentRaceData.NoSameRandomCategory and currentCategory and
+                vehicleData.category == currentCategory
+            local usedCategory = CurrentRaceData.UniqueRandomCategory and usedCategories[vehicleData.category]
+            if not sameVehicle and not sameCategory and not usedCategory then
+                filtered[#filtered + 1] = vehicleData
+            end
+        end
+        return filtered
+    end
+
+    if CurrentRaceData.SharedRandomCategories then
+        -- Build the racer's personal shuffled rotation lazily. Every racer draws
+        -- from the same enabled category set (host config), so shuffling
+        -- independently means everyone covers the same categories in different
+        -- orders. Vehicle pick within a category stays random per racer.
+        local sequence = CurrentRaceData.SharedCategorySequence or {}
+        local index = (CurrentRaceData.SharedCategorySequenceIndex or 0) + 1
+        if #sequence == 0 or index > #sequence then
+            sequence = buildSharedCategorySequence()
+            index = 1
+        end
+        CurrentRaceData.SharedCategorySequence = sequence
+        CurrentRaceData.SharedCategorySequenceIndex = index
+
+        local nextCategory = sequence[index]
+        if nextCategory then
+            local categoryPool = {}
+            for _, vehicleData in ipairs(availableVehicles) do
+                if vehicleData.category == nextCategory then
+                    categoryPool[#categoryPool + 1] = vehicleData
+                end
+            end
+            -- Honor noSameRandomVehicle within the chosen category. Other category
+            -- exclusions don't apply: the rotation already dictates the category.
+            if CurrentRaceData.NoSameRandomVehicle and #categoryPool > 1 then
+                local pruned = {}
+                for _, vehicleData in ipairs(categoryPool) do
+                    if vehicleData.hash ~= currentHash then
+                        pruned[#pruned + 1] = vehicleData
+                    end
+                end
+                if #pruned > 0 then categoryPool = pruned end
+            end
+            if #categoryPool > 0 then
+                availableVehicles = categoryPool
+            else
+                DebugLog('Shared rotation: category "' .. nextCategory .. '" has no eligible vehicles, falling back')
+            end
+        end
+    elseif CurrentRaceData.UniqueRandomCategory then
+        CurrentRaceData.UsedRandomCategories = CurrentRaceData.UsedRandomCategories or {}
+        local filtered = applyExclusions(availableVehicles, CurrentRaceData.UsedRandomCategories)
+        if #filtered == 0 then
+            -- All categories exhausted (or filters too tight): reset rotation and retry.
+            CurrentRaceData.UsedRandomCategories = {}
+            filtered = applyExclusions(availableVehicles, CurrentRaceData.UsedRandomCategories)
+        end
+        if #filtered > 0 then
+            availableVehicles = filtered
+        else
+            DebugLog('No vehicles left after exclusions; keeping unfiltered pool')
+        end
+    elseif CurrentRaceData.NoSameRandomVehicle or CurrentRaceData.NoSameRandomCategory then
+        local filtered = applyExclusions(availableVehicles, {})
+        if #filtered > 0 then
+            availableVehicles = filtered
+        else
+            DebugLog('No vehicles left after no-same exclusions; keeping unfiltered pool')
+        end
+    end
+
+    local selection = availableVehicles[math.random(#availableVehicles)]
+    if CurrentRaceData.UniqueRandomCategory and selection and selection.category then
+        CurrentRaceData.UsedRandomCategories = CurrentRaceData.UsedRandomCategories or {}
+        CurrentRaceData.UsedRandomCategories[selection.category] = true
+    end
+    -- Load the model BEFORE snapshotting position/momentum. Previously the
+    -- snapshot was taken first, then loadModel yielded for 10-100s of ms
+    -- while RequestModel cycled. When the model was uncached the player
+    -- drove on during the yield and the new vehicle spawned behind them;
+    -- when the model was cached loadModel returned immediately and the new
+    -- vehicle spawned exactly on top of the old one, which is what the
+    -- physics engine resolves by launching one car skyward or burying it.
+    -- Snapshotting after the load eliminates both cases.
+    loadModel(selection.hash)
+
+    local coords = GetEntityCoords(currentVehicle)
+    local heading = GetEntityHeading(currentVehicle)
+    local speed = GetEntitySpeed(currentVehicle)
+    local velocity = GetEntityVelocity(currentVehicle)
+    local vx, vy, vz = velocity.x, velocity.y, velocity.z
+    -- Drop any upward component so SetVehicleForwardSpeed along the vehicle's
+    -- pitched forward axis can't launch the new car off a crest.
+    if vz > 0.0 then vz = 0.0 end
+
+    -- Resolve a safe spawn Z. Spawning at the old vehicle's exact origin can
+    -- bury the new vehicle when their chassis-center-to-wheel offsets differ
+    -- (low-slung supercar to SUV puts the SUV origin below ground), and
+    -- SetVehicleOnGroundProperly raycasting from inside terrain doesn't
+    -- always recover. Float a small buffer above true ground so the snap-down
+    -- has clean geometry; preserve old Z if the racer is airborne.
+    local groundFound, groundZ = GetGroundZFor_3dCoord(coords.x, coords.y, coords.z + 3.0, false)
+    local spawnZ = coords.z
+    if groundFound then
+        spawnZ = math.max(coords.z, groundZ + 1.0)
+    end
+
+    -- Delete the OLD vehicle before spawning the new one. SetEntityNoCollisionEntity
+    -- isn't enough — a freshly spawned vehicle's first physics tick still
+    -- reacts to terrain occluded by the old vehicle, and the gear/RPM init
+    -- runs through corrupted state. Freeze the ped briefly so it doesn't
+    -- ragdoll out during the single frame between vehicle delete and ped
+    -- re-seat; invincibility blocks any one-tick fall damage.
+    SetEntityInvincible(ped, true)
+    FreezeEntityPosition(ped, true)
+    if requestControlOfEntity(currentVehicle) then
+        SetEntityAsMissionEntity(currentVehicle, true, true)
+        DeleteVehicle(currentVehicle)
+    end
+    if DoesEntityExist(currentVehicle) then
+        DeleteEntity(currentVehicle)
+    end
+
+    local newVehicle = CreateVehicle(selection.hash, coords.x, coords.y, spawnZ, heading, true, true)
+    SetModelAsNoLongerNeeded(selection.hash)
+
+    if newVehicle == 0 then
+        DebugLog('Failed to create random race vehicle', selection.model)
+        FreezeEntityPosition(ped, false)
+        SetEntityInvincible(ped, false)
+        return false
+    end
+
+    SetEntityAsMissionEntity(newVehicle, true, true)
+    SetVehicleOnGroundProperly(newVehicle)
+    SetPedIntoVehicle(ped, newVehicle, -1)
+    FreezeEntityPosition(ped, false)
+    SetEntityInvincible(ped, false)
+
+    applyRaceSwapVehicleEffects(newVehicle)
+    SetVehicleEngineOn(newVehicle, true, true, false)
+    SetVehicleUndriveable(newVehicle, false)
+    SetVehicleHandbrake(newVehicle, false)
+    SetVehRadioStation(newVehicle, 'OFF')
+
+    if speed > 0.1 then
+        -- SetVehicleForwardSpeed spins the wheels to match speed; SetEntityVelocity
+        -- then overwrites the rigid-body velocity with the pre-swap horizontal
+        -- trajectory so the car keeps going where the player was heading.
+        SetVehicleForwardSpeed(newVehicle, speed)
+        SetEntityVelocity(newVehicle, vx, vy, vz)
+        SetVehicleCurrentRpm(newVehicle, 1.0)
+
+        -- Feed throttle input for ~30 frames after the swap. A freshly
+        -- spawned vehicle starts in 1st gear; in 1st gear at 80mph the
+        -- engine is rev-limited and produces no useful torque — which is
+        -- the "stuck until you slow under 20mph" symptom. The auto-trans
+        -- WILL upshift when it sees RPM-at-redline with throttle applied,
+        -- but a just-swapped racer isn't giving throttle yet, so the sim
+        -- sits in 1st gear forever. SetVehicleCurrentGear doesn't stick
+        -- (auto-trans overrides it next tick); pinning the throttle does,
+        -- because it's the natural upshift trigger.
+        local pinVehicle = newVehicle
+        local pinSpeed = speed
+        CreateThread(function()
+            for _ = 1, 30 do
+                Wait(0)
+                if not DoesEntityExist(pinVehicle) then return end
+                if GetVehiclePedIsIn(PlayerPedId(), false) ~= pinVehicle then return end
+                SetControlNormal(0, 71, 1.0) -- INPUT_VEH_ACCELERATE
+                SetVehicleForwardSpeed(pinVehicle, pinSpeed)
+                SetVehicleCurrentRpm(pinVehicle, 1.0)
+            end
+        end)
+    end
+
+    -- Grant keys asynchronously so the callback await doesn't kill momentum.
+    CreateThread(function()
+        giveKeysForRaceSwapVehicle(newVehicle)
+    end)
+
+    return true
+end
+
 local function cleanupObjects()
     DeleteObject(CreatorObjectLeft)
     DeleteObject(CreatorObjectRight)
@@ -371,6 +890,10 @@ local function markWithUglyWaypoint()
 end
 
 local function deleteCurrentRaceCheckpoints()
+    -- Clear checkpoint lamps
+    if ClearAllLamps then ClearAllLamps() end
+    if StopLampUpdateThread then StopLampUpdateThread() end
+    
     for _, checkpointData in pairs(CurrentRaceData.Checkpoints) do
         local blip = checkpointData.blip
         if blip then
@@ -398,6 +921,15 @@ local function deleteCurrentRaceCheckpoints()
     CurrentRaceData.TotalTime = 0
     CurrentRaceData.BestLap = 0
     CurrentRaceData.FirstPerson = false
+    CurrentRaceData.RandomVehicleSwapping = false
+    CurrentRaceData.RandomVehicleCategories = {}
+    CurrentRaceData.NoSameRandomVehicle = false
+    CurrentRaceData.NoSameRandomCategory = false
+    CurrentRaceData.UniqueRandomCategory = false
+    CurrentRaceData.UsedRandomCategories = {}
+    CurrentRaceData.SharedRandomCategories = false
+    CurrentRaceData.SharedCategorySequence = {}
+    CurrentRaceData.SharedCategorySequenceIndex = 0
     CurrentRaceData.RacerName = nil
     RaceData.InRace = false
 end
@@ -492,6 +1024,9 @@ local function clearBlips()
 end
 
 local function deleteAllCheckpoints()
+    -- Clear any active checkpoint lamps first
+    if ClearAllLamps then ClearAllLamps() end
+    
     for _, checkPointData in pairs(CreatorData.Checkpoints) do
         if checkPointData then
             if checkPointData.pileleft then
@@ -571,9 +1106,15 @@ local function updateGpsForRace(started)
             AddPointToGpsMultiRoute(coords.x, coords.y, coords.z or 0.0)
         end
 
-        local pileModel = isFinishOrStart(checkpointIndex) and StartAndFinishModel or CheckpointPileModel
-        checkpointData.pileleft = createPile(checkpointData.offset.left, pileModel)
-        checkpointData.pileright = createPile(checkpointData.offset.right, pileModel)
+        local isStartFinish = isFinishOrStart(checkpointIndex)
+        local isNight = IsNightTime and IsNightTime() or false
+        
+        -- Skip flag prop at start/finish during nighttime (lamps will be used instead)
+        if not (isStartFinish and isNight) then
+            local pileModel = isStartFinish and StartAndFinishModel or CheckpointPileModel
+            checkpointData.pileleft = createPile(checkpointData.offset.left, pileModel)
+            checkpointData.pileright = createPile(checkpointData.offset.right, pileModel)
+        end
 
         if checkpointData.blip then
             SetBlipDisplay(checkpointData.blip, 2) 
@@ -585,6 +1126,11 @@ local function updateGpsForRace(started)
         SetGpsCustomRouteRender(ShowGpsRoute, 16, 16)
     else
         SetGpsMultiRouteRender(ShowGpsRoute, 16, 16)
+    end
+    
+    -- Update checkpoint lamps (only visible at night)
+    if UpdateRaceLamps then
+        UpdateRaceLamps(CurrentRaceData.Checkpoints, currentCheckpoint, CurrentRaceData.TotalLaps, Config.MarkAmountOfCheckpointsAhead)
     end
 end
 
@@ -1319,6 +1865,9 @@ local function initRacingHudThread()
                                 CurrentRaceData.Lap = CurrentRaceData.Lap + 1
                                 CurrentRaceData.CurrentCheckpoint = 1
                                 sendRacerUpdate(false)
+                                if CurrentRaceData.RandomVehicleSwapping then
+                                    swapToRandomRaceVehicle()
+                                end
 
                                 passedBlip(CurrentRaceData.Checkpoints[CurrentRaceData.CurrentCheckpoint].blip)
                                 nextBlip(CurrentRaceData.Checkpoints[CurrentRaceData.CurrentCheckpoint + 1].blip)
@@ -1389,12 +1938,29 @@ local function handleActiveRace(raceData, trackCheckpoints, Laps)
         Racers = {},
         Position = 0,
         Drift = raceData.Drift or false,
+        RandomVehicleSwapping = raceData.RandomVehicleSwapping or false,
+        RandomVehicleCategories = raceData.RandomVehicleCategories or {},
+        NoSameRandomVehicle = raceData.NoSameRandomVehicle or false,
+        NoSameRandomCategory = raceData.NoSameRandomCategory or false,
+        UniqueRandomCategory = raceData.UniqueRandomCategory or false,
+        UsedRandomCategories = {},
+        SharedRandomCategories = raceData.SharedRandomCategories or false,
+        SharedCategorySequence = {},
+        SharedCategorySequenceIndex = 0,
     }
     initRacingHudThread()
     DisplayTrack(CurrentRaceData)
     DebugLog('Race Was setup:', json.encode(CurrentRaceData))
     startRaceUi()
     markWithDrawTextWaypoint()
+    
+    -- Start the lamp update thread for day/night transitions
+    -- Note: Lamps are spawned via updateGpsForRace() which is called by DisplayTrack
+    if StartLampUpdateThread then
+        StartLampUpdateThread(function()
+            return CurrentRaceData
+        end)
+    end
 end
 
 -----------------------
@@ -1410,6 +1976,9 @@ AddEventHandler('onResourceStop', function(resource)
         end
         deleteAllCheckpoints()
         clearBlips()
+        -- Clear lamps on resource stop
+        if ClearAllLamps then ClearAllLamps() end
+        if StopLampUpdateThread then StopLampUpdateThread() end
     end
 end)
 
@@ -1613,6 +2182,9 @@ RegisterNetEvent('cw-racingapp:client:raceCountdown', function(TotalRacers)
         CurrentRaceData.TotalLaps = CurrentRaceData.TotalRacers - 1
         CurrentRaceData.IsElimination = true
     end
+    if CurrentRaceData.RandomVehicleSwapping then
+        swapToRandomRaceVehicle()
+    end
     if CurrentRaceData.RaceId ~= nil then
         while Countdown ~= 0 do
             if CurrentRaceData.RaceName ~= nil then
@@ -1768,10 +2340,10 @@ local function createOxInput(fobType, purchaseType)
         print(
             '^1OxInput is enabled but no lib was found. Might be missing from fxmanifest or the dev is not able to read the config')
     else
-        local options = { { type = 'input', label = 'Racer Name', required = true, min = 1, max = 100 } }
+        local options = { { type = 'input', label = 'Racer Name', required = true } }
 
         if not purchaseType.useSlimmed then
-            options[#options + 1] = { type = 'number', label = 'Paypal/temp id (leave empty if for you)', min = 1, max = 20 }
+            options[#options + 1] = { type = 'input', label = 'Paypal/temp id (leave empty if for you)', required = false }
         end
         local FobInput = lib.inputDialog('Creating a [' .. fobType .. '] type user', options)
         return FobInput
@@ -1803,6 +2375,7 @@ local function createQbInput(fobType, purchaseType)
 end
 
 function AttemptCreateUser(racerName, racerId, fobType, purchaseType)
+    print('[DEBUG] AttemptCreateUser called')
     if UseDebug then
         print('Racername', racerName)
         print('RacerId', racerId)
@@ -1811,9 +2384,13 @@ function AttemptCreateUser(racerName, racerId, fobType, purchaseType)
     end
     if racerId == nil or racerId == '' then
         racerId = GetPlayerServerId(PlayerId())
+        print('[DEBUG] Set racerId to:', racerId)
     end
+    print('[DEBUG] Checking if racerName is valid:', racerName)
     if racerNameIsValid(racerName) then
+        print('[DEBUG] racerName is valid, fetching player names...')
         local playerNames = cwCallback.await('cw-racingapp:server:getRacerNamesByPlayer', racerId)
+        print('[DEBUG] playerNames result:', json.encode(playerNames))
 
         DebugLog('player names', #playerNames, json.encode(playerNames))
         local maxRacerNames = Config.MaxRacerNames
@@ -1844,6 +2421,8 @@ RegisterNetEvent("cw-racingapp:client:openFobInput", function(data)
     local purchaseType = data.purchaseType
     local fobType = data.fobType
 
+    print('[DEBUG] openFobInput triggered, fobType:', fobType)
+
     NotifyHandler(Lang("max_uniques") .. " " .. Config.MaxRacerNames)
 
     local dialog
@@ -1851,9 +2430,11 @@ RegisterNetEvent("cw-racingapp:client:openFobInput", function(data)
     local racerId
     if Config.OxInput then
         dialog = createOxInput(fobType, purchaseType)
+        print('[DEBUG] OxInput dialog result:', json.encode(dialog))
         if dialog then
             racerName = dialog[1]
             racerId = dialog[2]
+            print('[DEBUG] racerName:', racerName, 'racerId:', racerId)
         end
     else
         dialog = createQbInput(fobType, purchaseType)
@@ -1864,10 +2445,45 @@ RegisterNetEvent("cw-racingapp:client:openFobInput", function(data)
     end
 
     if dialog ~= nil then
+        print('[DEBUG] Calling AttemptCreateUser')
         AttemptCreateUser(racerName, racerId, fobType, purchaseType)
     else
+        print('[DEBUG] Dialog was nil, not calling AttemptCreateUser')
         TriggerEvent('animations:client:EmoteCommandStart', { "c" })
     end
+end)
+
+-- Replacement Racing GPS — for racers who lost theirs. Confirms the price, then
+-- lets the server validate (already has one / has an account / can afford) and
+-- hand over the item. The cost is read server-side from Config so it can't be
+-- spoofed; `purchaseSource` just says which buy point ('trader'/'laptop') was used.
+RegisterNetEvent('cw-racingapp:client:buyReplacementGps', function(data)
+    local purchaseSource = (data and data.purchaseSource) or 'trader'
+    local cfg = (purchaseSource == 'laptop') and Config.Laptop or Config.Trader
+    local currency
+    if cfg.moneyType == 'cash' or cfg.moneyType == 'bank' then
+        currency = '$'
+    else
+        currency = Config.Payments.cryptoType
+    end
+    local cost = cfg.gpsCost or 0
+
+    if hasGps() then
+        NotifyHandler('You already have a Racing GPS.', 'error')
+        return
+    end
+
+    if lib then
+        local accepted = lib.alertDialog({
+            header = 'Replacement Racing GPS',
+            content = ('Buy a new Racing GPS for **%s%s**?'):format(currency, cost),
+            centered = true,
+            cancel = true,
+        })
+        if accepted ~= 'confirm' then return end
+    end
+
+    TriggerServerEvent('cw-racingapp:server:buyReplacementGps', purchaseSource)
 end)
 
 if Config.Trader.active then
@@ -1903,6 +2519,18 @@ if Config.Trader.active then
             }
             options[#options + 1] = option
         end
+
+        -- Replacement GPS — only shows when the player isn't already holding one.
+        options[#options + 1] = {
+            type = "client",
+            event = "cw-racingapp:client:buyReplacementGps",
+            icon = "fas fa-location-dot",
+            label = 'Buy a replacement Racing GPS (' .. currency .. (trader.gpsCost or 0) .. ')',
+            purchaseSource = 'trader',
+            canInteract = function()
+                return not hasGps()
+            end
+        }
 
         RequestModel(trader.model)
         while not HasModelLoaded(trader.model) do
@@ -1962,6 +2590,19 @@ if Config.Laptop.active then
             }
             options[#options + 1] = option
         end
+
+        -- Replacement GPS — only shows when the player isn't already holding one.
+        options[#options + 1] = {
+            type = "client",
+            event = "cw-racingapp:client:buyReplacementGps",
+            icon = "fas fa-location-dot",
+            label = 'Buy a replacement Racing GPS (' .. currency .. (laptop.gpsCost or 0) .. ')',
+            purchaseSource = 'laptop',
+            canInteract = function()
+                return not hasGps()
+            end
+        }
+
         laptopEntity = CreateObject(laptop.model, laptop.location.x, laptop.location.y, laptop.location.z, false, false,
             true)
         SetEntityHeading(laptopEntity, laptop.location.w)
@@ -1995,7 +2636,7 @@ if Config.UseOxLibForKeybind then
     else
         lib.addKeybind({
             name = 'clickAddCheckpoint',
-            description = '(Track Creator) Add checkpoint',
+            description = '[Track Creator] Add checkpoint',
             defaultKey = Config.Buttons.AddCheckpoint,
             onPressed = function(self)
                 if RaceData.InCreator then
@@ -2005,7 +2646,7 @@ if Config.UseOxLibForKeybind then
         })
         lib.addKeybind({
             name = 'clickDeleteCheckpoint',
-            description = '(Track Creator) Remove checkpoint',
+            description = '[Track Creator] Remove checkpoint',
             defaultKey = Config.Buttons.DeleteCheckpoint,
             onPressed = function(self)
                 if RaceData.InCreator then
@@ -2015,7 +2656,7 @@ if Config.UseOxLibForKeybind then
         })
         lib.addKeybind({
             name = 'clickMoveCheckpoint',
-            description = '(Track Creator) Move checkpoint',
+            description = '[Track Creator] Move checkpoint',
             defaultKey = Config.Buttons.MoveCheckpoint,
             onPressed = function(self)
                 if RaceData.InCreator then
@@ -2025,7 +2666,7 @@ if Config.UseOxLibForKeybind then
         })
         lib.addKeybind({
             name = 'clickSaveRace',
-            description = '(Track Creator) Save track',
+            description = '[Track Creator] Save track',
             defaultKey = Config.Buttons.SaveRace,
             onPressed = function(self)
                 if RaceData.InCreator then
@@ -2035,7 +2676,7 @@ if Config.UseOxLibForKeybind then
         })
         lib.addKeybind({
             name = 'clickIncreaseDistance',
-            description = '(Track Creator) Increase Checkpoint Size',
+            description = '[Track Creator] Increase Checkpoint Size',
             defaultKey = Config.Buttons.IncreaseDistance,
             onPressed = function(self)
                 if RaceData.InCreator then
@@ -2045,7 +2686,7 @@ if Config.UseOxLibForKeybind then
         })
         lib.addKeybind({
             name = 'clickDecreaseDistance',
-            description = '(Track Creator) Decrease Checkpoint Size',
+            description = '[Track Creator] Decrease Checkpoint Size',
             defaultKey = Config.Buttons.DecreaseDistance,
             onPressed = function(self)
                 if RaceData.InCreator then
@@ -2055,7 +2696,7 @@ if Config.UseOxLibForKeybind then
         })
         lib.addKeybind({
             name = 'clickExit',
-            description = '(Track Creator) Exit track creation',
+            description = '[Track Creator] Exit track creation',
             defaultKey = Config.Buttons.Exit,
             onPressed = function(self)
                 if RaceData.InCreator then
@@ -2075,7 +2716,7 @@ else
         end
     end, false)
 
-    RegisterKeyMapping("clickAddCheckpoint", "(Track Creator) Add checkpoint", "keyboard", Config.Buttons.AddCheckpoint)
+    RegisterKeyMapping("clickAddCheckpoint", "[Track Creator] Add checkpoint", "keyboard", Config.Buttons.AddCheckpoint)
 
     RegisterCommand("clickDeleteCheckpoint", function()
         if RaceData.InCreator then
@@ -2087,7 +2728,7 @@ else
         end
     end, false)
 
-    RegisterKeyMapping("clickDeleteCheckpoint", "(Track Creator) Remove checkpoint", "keyboard",
+    RegisterKeyMapping("clickDeleteCheckpoint", "[Track Creator] Remove checkpoint", "keyboard",
         Config.Buttons.DeleteCheckpoint)
 
     RegisterCommand("clickMoveCheckpoint", function()
@@ -2100,7 +2741,7 @@ else
         end
     end, false)
 
-    RegisterKeyMapping("clickMoveCheckpoint", "(Track Creator) Move checkpoint", "keyboard",
+    RegisterKeyMapping("clickMoveCheckpoint", "[Track Creator] Move checkpoint", "keyboard",
         Config.Buttons.MoveCheckpoint)
 
     RegisterCommand("clickSaveRace", function()
@@ -2113,7 +2754,7 @@ else
         end
     end, false)
 
-    RegisterKeyMapping("clickSaveRace", "(Track Creator) Save track", "keyboard", Config.Buttons.SaveRace)
+    RegisterKeyMapping("clickSaveRace", "[Track Creator] Save track", "keyboard", Config.Buttons.SaveRace)
 
     RegisterCommand("clickIncreaseDistance", function()
         if RaceData.InCreator then
@@ -2125,7 +2766,7 @@ else
         end
     end, false)
 
-    RegisterKeyMapping("clickIncreaseDistance", "(Track Creator) Increase Checkpoint Size", "keyboard",
+    RegisterKeyMapping("clickIncreaseDistance", "[Track Creator] Increase Checkpoint Size", "keyboard",
         Config.Buttons.IncreaseDistance)
 
     RegisterCommand("clickDecreaseDistance", function()
@@ -2138,7 +2779,7 @@ else
         end
     end, false)
 
-    RegisterKeyMapping("clickDecreaseDistance", "(Track Creator) Decrease Checkpoint Size", "keyboard",
+    RegisterKeyMapping("clickDecreaseDistance", "[Track Creator] Decrease Checkpoint Size", "keyboard",
         Config.Buttons.DecreaseDistance)
 
     RegisterCommand("clickExit", function()
@@ -2151,7 +2792,7 @@ else
         end
     end, false)
 
-    RegisterKeyMapping("clickExit", "(Track Creator) Exit track creation", "keyboard", Config.Buttons.Exit)
+    RegisterKeyMapping("clickExit", "[Track Creator] Exit track creation", "keyboard", Config.Buttons.Exit)
 end
 
 -- Custom UI
@@ -2182,6 +2823,7 @@ function GetBaseDataObject()
     local setup = {
         classes = classes,
         currentVehicle = currentVehicle;
+        randomVehicleCategoryOptions = getRandomRaceVehicleCategoryOptions(),
         laps = Config.Options.Laps,
         buyIns = Config.Options.BuyIns,
         participationCurrencyOptions = Config.Options.participationCurrencyOptions,

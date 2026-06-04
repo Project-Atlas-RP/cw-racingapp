@@ -5,13 +5,13 @@
         {{ translate('setup_race') }}
       </Button>
     </DialogTrigger>
-    <DialogContent class="dark max-w-2xl">
+    <DialogContent class="dark max-w-2xl max-h-[90vh] flex flex-col">
       <DialogHeader>
         <DialogTitle>
           {{ translate('selected_track') }} {{ track.RaceName }}
         </DialogTitle>
       </DialogHeader>
-      <DialogDescription>
+      <DialogDescription class="flex-1 min-h-0 overflow-y-auto pr-1">
         <form :id="'setup-'+track.TrackId">
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <!-- Laps -->
@@ -132,6 +132,89 @@
                 <FormMessage />
               </FormItem>
             </FormField>
+            <!-- Random Vehicle Swapping -->
+            <FormField
+              v-if="globalStore?.baseData?.data?.auth?.adminMenu"
+              type="checkbox"
+              v-slot="{ componentField }"
+              name="randomVehicleSwapping"
+            >
+              <FormItem>
+                <FormLabel>{{ translate('random_vehicle_swapping') }}</FormLabel>
+                <FormControl>
+                  <Switch v-bind="componentField" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            </FormField>
+          </div>
+          <div
+            v-if="globalStore?.baseData?.data?.auth?.adminMenu && form.values.randomVehicleSwapping"
+            class="mb-4 rounded-lg border border-border/60 bg-muted/20 p-4"
+          >
+            <div class="mb-3">
+              <div class="text-sm font-medium">
+                {{ translate('random_vehicle_categories') }}
+              </div>
+              <div class="text-xs text-muted-foreground">
+                {{ translate('random_vehicle_categories_hint') }}
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div
+                v-for="category in randomVehicleCategoryOptions"
+                :key="category.value"
+                class="flex items-center justify-between rounded-md border border-border/60 bg-background/60 px-3 py-2"
+              >
+                <span class="text-sm">{{ category.text }}</span>
+                <Switch
+                  :model-value="isRandomVehicleCategoryEnabled(category.value)"
+                  @update:model-value="(value) => toggleRandomVehicleCategory(category.value, Boolean(value))"
+                />
+              </div>
+            </div>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div class="flex items-center justify-between rounded-md border border-border/60 bg-background/60 px-3 py-2">
+                <div class="pr-3">
+                  <div class="text-sm">{{ translate('random_no_same_vehicle') }}</div>
+                  <div class="text-xs text-muted-foreground">{{ translate('random_no_same_vehicle_hint') }}</div>
+                </div>
+                <Switch
+                  :model-value="form.values.noSameRandomVehicle"
+                  @update:model-value="(value) => form.setFieldValue('noSameRandomVehicle', Boolean(value))"
+                />
+              </div>
+              <div class="flex items-center justify-between rounded-md border border-border/60 bg-background/60 px-3 py-2">
+                <div class="pr-3">
+                  <div class="text-sm">{{ translate('random_no_same_category') }}</div>
+                  <div class="text-xs text-muted-foreground">{{ translate('random_no_same_category_hint') }}</div>
+                </div>
+                <Switch
+                  :model-value="form.values.noSameRandomCategory"
+                  @update:model-value="(value) => form.setFieldValue('noSameRandomCategory', Boolean(value))"
+                />
+              </div>
+              <div class="flex items-center justify-between rounded-md border border-border/60 bg-background/60 px-3 py-2">
+                <div class="pr-3">
+                  <div class="text-sm">{{ translate('random_unique_category') }}</div>
+                  <div class="text-xs text-muted-foreground">{{ translate('random_unique_category_hint') }}</div>
+                </div>
+                <Switch
+                  :model-value="form.values.uniqueRandomCategory"
+                  @update:model-value="(value) => form.setFieldValue('uniqueRandomCategory', Boolean(value))"
+                />
+              </div>
+              <div class="flex items-center justify-between rounded-md border border-border/60 bg-background/60 px-3 py-2">
+                <div class="pr-3">
+                  <div class="text-sm">{{ translate('random_shared_categories') }}</div>
+                  <div class="text-xs text-muted-foreground">{{ translate('random_shared_categories_hint') }}</div>
+                </div>
+                <Switch
+                  :model-value="form.values.sharedRandomCategories"
+                  @update:model-value="(value) => form.setFieldValue('sharedRandomCategories', Boolean(value))"
+                />
+              </div>
+            </div>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <!-- Participation Money -->
@@ -192,13 +275,13 @@
               </FormItem>
             </FormField>
           </div>
-          <DialogFooter>
-            <Button :disabled="globalStore.activeRace?.raceName" type="submit" form="dialogForm" @click="handleConfirm">
-              {{ translate('confirm') }}
-            </Button>
-          </DialogFooter>
         </form>
       </DialogDescription>
+      <DialogFooter class="shrink-0">
+        <Button :disabled="globalStore.activeRace?.raceName" type="button" @click="handleConfirm">
+          {{ translate('confirm') }}
+        </Button>
+      </DialogFooter>
     </DialogContent>
   </Dialog>
 </template>
@@ -210,6 +293,7 @@ import { closeApp } from "@/helpers/closeApp";
 import { useGlobalStore } from "@/store/global";
 import { Track } from "@/store/types";
 import { translate } from "@/helpers/translate";
+import { toast } from "vue-sonner";
 import {
   Dialog,
   DialogContent,
@@ -258,6 +342,8 @@ const trackHasDefinedType = props.track.Metadata?.raceType === 'circuit_only' ||
 const defaultLapValue = trackHasDefinedType ? (
   props.track.Metadata?.raceType === 'circuit_only' ? globalStore.baseData.data.laps[2].value :'sprint' ):
   'sprint'
+const randomVehicleCategoryOptions = computed(() => globalStore.baseData.data.randomVehicleCategoryOptions ?? []);
+const defaultRandomVehicleCategories = randomVehicleCategoryOptions.value.map((option) => option.value);
 
 const setupData = ref({
   laps: defaultLapValue,
@@ -271,6 +357,12 @@ const setupData = ref({
   participationCurrency: globalStore.baseData.data.participationCurrencyOptions[0].value,
   silent: false,
   drift: false,
+  randomVehicleSwapping: false,
+  randomVehicleCategories: defaultRandomVehicleCategories,
+  noSameRandomVehicle: false,
+  noSameRandomCategory: false,
+  uniqueRandomCategory: false,
+  sharedRandomCategories: false,
   trackId: props.track.TrackId,
 });
 
@@ -278,12 +370,31 @@ const form = useForm({
   initialValues: setupData.value,
 })
 
+const isRandomVehicleCategoryEnabled = (category: string) =>
+  (form.values.randomVehicleCategories ?? []).includes(category);
+
+const toggleRandomVehicleCategory = (category: string, enabled: boolean) => {
+  const categories = new Set(form.values.randomVehicleCategories ?? []);
+
+  if (enabled) {
+    categories.add(category);
+  } else {
+    categories.delete(category);
+  }
+
+  form.setFieldValue("randomVehicleCategories", Array.from(categories));
+};
+
 const handleConfirm = async () => {
   if (form.values.participationMoney < 0)
     form.values.participationMoney = 0;
   if (form.values.laps === -1) {
     form.values.ranked = false;
     form.values.drift = false
+  }
+  if (form.values.randomVehicleSwapping && (form.values.randomVehicleCategories?.length ?? 0) === 0) {
+    toast.error(translate('random_vehicle_category_required'));
+    return;
   }
   
   let maxClass;
@@ -313,6 +424,12 @@ const handleConfirm = async () => {
     firstPerson: form.values.firstPerson,
     silent: form.values.silent,
     drift: form.values.drift,
+    randomVehicleSwapping: form.values.randomVehicleSwapping,
+    randomVehicleCategories: form.values.randomVehicleSwapping ? form.values.randomVehicleCategories : [],
+    noSameRandomVehicle: form.values.randomVehicleSwapping ? form.values.noSameRandomVehicle : false,
+    noSameRandomCategory: form.values.randomVehicleSwapping ? form.values.noSameRandomCategory : false,
+    uniqueRandomCategory: form.values.randomVehicleSwapping ? form.values.uniqueRandomCategory : false,
+    sharedRandomCategories: form.values.randomVehicleSwapping ? form.values.sharedRandomCategories : false,
   };
 
   const res = await api.post("UiSetupRace", JSON.stringify(data));

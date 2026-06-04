@@ -18,6 +18,11 @@ export type Bounty = {
   price: string;
   rankRequired: number;
   sprint: boolean;
+
+  export type CategoryOption = {
+    value: string;
+    text: string;
+  };
   trackName: string;
   claimed: Record<string, BountyClaim>;
 };
@@ -31,12 +36,14 @@ export type TrackMetadata = {
 export type Notification = {
   title: string;
   text?: string;
+    randomVehicleCategories: string[];
   type: string;
 };
 
 export type DashboardSettings = {
     enabled: boolean, 
     defaultDaysBack: number,
+      randomVehicleCategoryOptions: CategoryOption[];
     defaultTopRacers: number,
 }
 
@@ -143,6 +150,7 @@ export type CurrentRace = {
   drift: boolean;
   ranked: boolean;
   reversed: boolean;
+  randomVehicleSwapping: boolean;
   hostName: string;
 };
 

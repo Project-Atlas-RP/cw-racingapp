@@ -9,13 +9,13 @@ end)
 -- Adds money to user
 function addMoney(src, moneyType, amount)
     local Player = QBCore.Functions.GetPlayer(src)
-    Player.Functions.AddMoney(moneyType, math.floor(amount))
+    Player.Functions.AddMoney(moneyType, math.floor(amount), 'cw-racingapp:winnings')
 end
 
 -- Removes money from user
 function removeMoney(src, moneyType, amount, reason)
     local Player = QBCore.Functions.GetPlayer(src)
-    return Player.Functions.RemoveMoney(moneyType, math.floor(amount))
+    return Player.Functions.RemoveMoney(moneyType, math.floor(amount), reason or 'cw-racingapp')
 end
 
 -- Checks that user can pay
