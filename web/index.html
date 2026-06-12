@@ -12,5 +12,81 @@
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
+
+    <!-- atlas_tablet: "back to tablet" button, placed inside the racing app's own
+         sidebar footer (next to Settings) so it never covers the page content. -->
+    <style>
+        #atlas-tablet-back {
+            display: flex; align-items: center; justify-content: center;
+            width: 32px; height: 32px; margin: 2px auto; padding: 0;
+            border: none; border-radius: 8px; cursor: pointer;
+            background: rgba(99, 102, 241, 0.92); color: #fff;
+            transition: background 150ms ease;
+        }
+        #atlas-tablet-back:hover { background: #6366f1; }
+        #atlas-tablet-back svg { width: 18px; height: 18px; }
+    </style>
+    <script>
+    (function () {
+        var RES = (function () {
+            try { if (typeof GetParentResourceName !== 'undefined') return GetParentResourceName(); } catch (e) {}
+            return 'cw-racingapp';
+        })();
+        var ICON = '<svg viewBox="0 0 24 24" fill="currentColor">'
+            + '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>'
+            + '<rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
+        var btn = null, poll = null;
+
+        function makeBtn() {
+            if (btn) return btn;
+            btn = document.createElement('button');
+            btn.id = 'atlas-tablet-back';
+            btn.title = 'Back to Tablet';
+            btn.innerHTML = ICON;
+            btn.addEventListener('click', function () {
+                setVisible(false);
+                fetch('https://' + RES + '/atlasReturnToTablet', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+                });
+            });
+            return btn;
+        }
+
+        // Drop the button into the racing app's sidebar footer (its own chrome), so
+        // it sits with the Settings icon and never overlaps the page content.
+        function place() {
+            var footers = document.querySelectorAll('[data-sidebar="footer"]');
+            var footer = null;
+            for (var i = 0; i < footers.length; i++) {
+                if (footers[i].offsetParent !== null) { footer = footers[i]; break; }
+            }
+            footer = footer || footers[0];
+            if (!footer) return false;
+            makeBtn();
+            if (btn.parentNode !== footer) footer.insertBefore(btn, footer.firstChild);
+            return true;
+        }
+
+        function setVisible(v) {
+            if (poll) { clearInterval(poll); poll = null; }
+            if (v) {
+                // The sidebar mounts after the open message, so retry placing briefly.
+                if (!place()) {
+                    var tries = 0;
+                    poll = setInterval(function () {
+                        if (place() || ++tries > 30) { clearInterval(poll); poll = null; }
+                    }, 100);
+                }
+            } else if (btn && btn.parentNode) {
+                btn.parentNode.removeChild(btn);
+            }
+        }
+
+        window.addEventListener('message', function (e) {
+            var d = e.data || {};
+            if (d.action === 'atlasTabletBack') { setVisible(!!d.show); }
+        });
+    })();
+    </script>
   </body>
 </html>

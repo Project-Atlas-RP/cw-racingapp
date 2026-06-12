@@ -52,9 +52,23 @@ function OpenUi()
     DebugLog('opening ui')
 
     if not UiIsOpen then
+        -- atlas_tablet: the racing app needs a Racing GPS or a tablet to open.
+        if (exports.ox_inventory:Search('count', 'racing_gps') or 0) < 1
+            and (exports.ox_inventory:Search('count', 'tablet') or 0) < 1 then
+            lib.notify({ title = 'Racing', description = 'You need a Racing GPS or a tablet to open this', type = 'error' })
+            return
+        end
         NotifyHandler(Lang("esc"))
         SetNuiFocus(true, true)
         SendNUIMessage({ type = 'toggleApp', open = true })
+
+        -- atlas_tablet: show the "back to tablet" button only when launched from the tablet.
+        local fromTablet = false
+        if GetResourceState('atlas_tablet') == 'started' then
+            fromTablet = exports.atlas_tablet:consumeLaunch('racing') == true
+        end
+        SendNUIMessage({ action = 'atlasTabletBack', show = fromTablet })
+
         UiIsOpen = true
         StartScreenEffect('MenuMGIn', 1, true)
         handleAnimation()
@@ -141,9 +155,20 @@ exports('openRacingApp', openRacingApp)
 function CloseUi()
     UiIsOpen = false
     SetNuiFocus(false, false)
+    SendNUIMessage({ type = 'toggleApp', open = false })          -- hide the racing app UI (Vue appIsOpen=false)
+    SendNUIMessage({ action = 'atlasTabletBack', show = false })  -- atlas_tablet: hide back button
     StopScreenEffect('MenuMGIn')
     stopAnimation()
 end
+
+-- atlas_tablet: "back to tablet" button returns the player to the tablet launcher.
+RegisterNUICallback('atlasReturnToTablet', function(_, cb)
+    cb('ok')
+    CloseUi()
+    if GetResourceState('atlas_tablet') == 'started' then
+        exports.atlas_tablet:openMenu()
+    end
+end)
 
 RegisterNUICallback('UiCloseUi', function(_, cb)
     CloseUi()
