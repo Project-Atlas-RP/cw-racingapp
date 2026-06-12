@@ -9,6 +9,13 @@ AddEventHandler('ox_inventory:usedItem', function(playerId, name, slotId, metada
     end
 end)
 
+function addSantaCoin(src, amount)
+    local player = Ox.GetPlayer(tonumber(src))
+    if not player then return false end
+
+    return exports.ox_inventory:AddItem(src, 'xmas2025_token', amount)
+end
+
 -- Adds money to user
 function addMoney(src, moneyType, amount)
     local player = Ox.GetPlayer(tonumber(src))
@@ -49,6 +56,11 @@ function canPay(src, moneyType, cost)
         if not account then return false end
         return account.get('balance') >= tonumber(cost)
     end
+end
+
+-- Gives an item to a player
+function giveItem(src, itemName, amount, metadata)
+    return exports.ox_inventory:AddItem(src, itemName, amount, metadata)
 end
 
 -- Fetches the CitizenId by Source

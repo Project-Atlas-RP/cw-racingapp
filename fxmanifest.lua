@@ -4,7 +4,7 @@ games { 'gta5' }
 
 author 'Coffeelot & Wuggie'
 description 'CW Racing App'
-version '5.1.4'
+version '6.2.11'
 
 ui_page {
     "web/dist/index.html"
@@ -17,6 +17,9 @@ shared_scripts {
     'shared/drift.lua',
     'shared/elo.lua',
     'shared/head2head.lua',
+    'shared/bounties.lua',
+    'shared/autoHost.lua',
+    'shared/itemPayouts.lua',
     '@qbx_core/modules/playerdata.lua', -- remove this if you don't use qbox
 }
 
@@ -30,6 +33,7 @@ client_scripts {
     'client/gui.lua',
     'client/head2head.lua',
     'client/drift.lua',
+    'client/driftchallenge.lua',
 }
 
 server_scripts {
@@ -46,6 +50,7 @@ server_scripts {
     'server/elo.lua',
     'server/head2head.lua',
     'server/drift.lua',
+    'server/driftchallenge.lua',
 }
 
 files {

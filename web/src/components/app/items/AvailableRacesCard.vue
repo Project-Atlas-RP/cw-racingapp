@@ -106,6 +106,22 @@
         <RotateCcw />
         {{ translate("reversed") }}
       </Badge>
+      <TooltipProvider v-if="props.race.ItemPayoutData">
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Badge
+              variant="outline"
+              class="bg-purple-500 text-white flex items-center gap-1"
+            >
+              <PackageIcon :size="14" />
+              {{ translate("item_rewards") || 'Item Rewards' }}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{{ translate("item_rewards_info") || 'Finishing racers may receive item rewards' }}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </CardContent>
     <CardFooter v-if="!props.race.Disabled" class="flex gap-2 justify-end">
       <Button variant="ghost" @click="showRace()">
@@ -140,6 +156,7 @@ import {
   EyeIcon,
   HandCoins,
   InfoIcon,
+  PackageIcon,
   RotateCcw,
   UsersIcon,
 } from "lucide-vue-next";
@@ -233,9 +250,11 @@ const showRace = async () => {
 const futureTimestamp = ref<number>(props.race.ExpirationTime);
 
 const remainingTime = ref<number>(
-  futureTimestamp.value
-    ? futureTimestamp.value - Math.floor(Date.now() / 1000)
-    : 0
+  props.race.ExpirationDuration != null
+    ? props.race.ExpirationDuration
+    : futureTimestamp.value
+      ? futureTimestamp.value - Math.floor(Date.now() / 1000)
+      : 0
 );
 
 const minutes = computed(() =>

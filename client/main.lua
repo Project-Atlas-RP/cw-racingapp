@@ -21,6 +21,7 @@ local RandomRaceVehicleCategoryOptions
 local CreatorData = {
     RaceName = nil,
     RacerName = nil,
+    RacerId = nil,
     Checkpoints = {},
     TireDistance = 3.0,
     ConfirmDelete = false,
@@ -72,20 +73,14 @@ local function updateRaceUi()
     })
 end
 
-local function updateUiData(dataType, data)
-    SendNUIMessage({
-        action = "update",
-        type = "dataUpdate",
-        dataType = dataType,
-        data = data,
-    })
-end
-
 RegisterNetEvent('cw-racingapp:client:updateUiData', function(dataType, data)
-    if dataType == 'crypto' then CurrentCrypto = data end
     if hasGps() then
-        updateUiData(dataType, data)
+        UpdateUiData(dataType, data)
     end
+end)
+
+RegisterNetEvent('cw-racingapp:client:updateUserData', function(dataType, data)
+    CurrentUserData[dataType] = data
 end)
 
 -----------------------
@@ -968,7 +963,7 @@ local function finishRace()
         PauseDriftScoring()
     end
     TriggerServerEvent('cw-racingapp:server:finishPlayer', CurrentRaceData, CurrentRaceData.TotalTime or 0,
-        CurrentRaceData.TotalLaps, CurrentRaceData.BestLap or 0, class, vehicleModel, CurrentRanking, CurrentCrew, driftScore or 0)
+        CurrentRaceData.TotalLaps, CurrentRaceData.BestLap or 0, class, vehicleModel, CurrentUserData.ranking, CurrentUserData.crew, driftScore or 0)
     unGhostPlayer()
     if IgnoreRoadsForGps then
         ClearGpsCustomRoute()
@@ -1245,6 +1240,7 @@ local function saveTrack()
 
     RaceData.InCreator = false
     CreatorData.RaceName = nil
+    CreatorData.RacerId = nil
     CreatorData.RacerName = nil
     CreatorData.Checkpoints = {}
     CreatorData.IsEdit = false
@@ -1920,8 +1916,8 @@ local function handleActiveRace(raceData, trackCheckpoints, Laps)
         SetupCitizenId = raceData.SetupCitizenId,
         SetupRacerName = raceData.SetupRacerName,
         RacerName = raceData.RacerName,
+        RacerId = raceData.RacerId,
         RaceName = raceData.RaceName,
-        Checkpoints = checkpoints,
         Ghosting = raceData.Ghosting,
         GhostingTime = raceData.GhostingTime,
         Ranked = raceData.Ranked,
@@ -1947,10 +1943,12 @@ local function handleActiveRace(raceData, trackCheckpoints, Laps)
         SharedRandomCategories = raceData.SharedRandomCategories or false,
         SharedCategorySequence = {},
         SharedCategorySequenceIndex = 0,
+        ItemPayoutData = raceData.ItemPayoutData or nil,
     }
+    DebugLog('Race Was setup:', json.encode(CurrentRaceData, { indent = true }))
+    CurrentRaceData.Checkpoints = checkpoints
     initRacingHudThread()
     DisplayTrack(CurrentRaceData)
-    DebugLog('Race Was setup:', json.encode(CurrentRaceData))
     startRaceUi()
     markWithDrawTextWaypoint()
     
@@ -1994,8 +1992,9 @@ RegisterNetEvent('cw-racingapp:client:readyJoinRace', function(raceData)
     end
 
     if MyCarClassIsAllowed(raceData.MaxClass, class) then
-        raceData.RacerName = CurrentName
-        raceData.RacerCrew = CurrentCrew
+        raceData.RacerName = CurrentUserData.racername
+        raceData.RacerCrew = CurrentUserData.crew
+        raceData.RacerId = CurrentUserData.racerid
         raceData.PlayerVehicleEntity = GetVehiclePedIsIn(PlayerPed, false)
         TriggerServerEvent('cw-racingapp:server:joinRace', raceData)
     else
@@ -2009,10 +2008,11 @@ local function openCreatorUi()
     startCreatorLoopThread()
 end
 
-RegisterNetEvent('cw-racingapp:client:startRaceEditor', function(raceName, racerName, trackId, checkpoints)
+RegisterNetEvent('cw-racingapp:client:startRaceEditor', function(raceName, racerName, racerid, trackId, checkpoints)
     if not RaceData.InCreator then
         CreatorData.RaceName = raceName
         CreatorData.RacerName = racerName
+        CreatorData.RacerId = racerid
         RaceData.InCreator = true
         if type(checkpoints) == 'table' then
             DebugLog('Using shared, checkpoint existed')
@@ -2026,6 +2026,7 @@ RegisterNetEvent('cw-racingapp:client:startRaceEditor', function(raceName, racer
             if result then
                 CreatorData.RaceName = raceName
                 CreatorData.RacerName = racerName
+                CreatorData.RacerId = racerid
                 CreatorData.TrackId = trackId
                 CreatorData.Checkpoints = {}
                 CreatorData.TireDistance = 3.0
@@ -2083,10 +2084,11 @@ RegisterNetEvent('cw-racingapp:client:updateRaceRacerData', function(raceId, cit
     end
 end)
 
-RegisterNetEvent('cw-racingapp:client:joinRace', function(data, checkpoints, laps, racerName)
+RegisterNetEvent('cw-racingapp:client:joinRace', function(data, checkpoints, laps)
     DebugLog('Joining', json.encode(data, {indent=true}))
     if not RaceData.InRace then
-        data.RacerName = racerName
+        data.RacerName = CurrentUserData.racername
+        data.RacerId  = CurrentUserData.racerid
         RaceData.InRace = true
         handleActiveRace(data, checkpoints, laps)
         NotifyHandler(Lang("race_joined"))
@@ -2122,7 +2124,17 @@ RegisterNetEvent('cw-racingapp:client:leaveRace', function()
     unGhostPlayer()
     deleteCurrentRaceCheckpoints()
     FreezeEntityPosition(GetVehiclePedIsIn(PlayerPedId(), false), false)
+    RaceData.InRace = false
+    LocalPlayer.state:set('inRace', false, true)
+    LocalPlayer.state:set('raceId', nil, true)
     CurrentRaceData.RaceId = nil
+    SendNUIMessage({
+        type = "race",
+        action = "update",
+        data = {},
+        racedata = RaceData,
+        active = false
+    })
 end)
 
 RegisterNetEvent("cw-racingapp:client:DeletetrackConfirmed", function(data)
@@ -2276,19 +2288,19 @@ local function racerNameIsValid(name)
 end
 
 local function hasPermission(userType)
-    if CurrentAuth == 'god' then
+    if CurrentUserData.auth == 'god' then
         return true
     elseif userType == 'racer' and Config.AllowRacerCreationForAnyone then
         return true
-    elseif CurrentAuth == 'master' and (userType == 'creator' or userType == 'racer') then
+    elseif CurrentUserData.auth == 'master' and (userType == 'creator' or userType == 'racer') then
         return true
     end
     return false
 end
 
 function HasAuth(tradeType, userType)
-    DebugLog('current auth', CurrentAuth)
-    if CurrentAuth and Config.Permissions[CurrentAuth] and Config.Permissions[CurrentAuth].controlAll then
+    DebugLog('current auth', CurrentUserData.auth)
+    if CurrentUserData.auth and Config.Permissions[CurrentUserData.auth] and Config.Permissions[CurrentUserData.auth].controlAll then
         DebugLog('User has controlall auth')
         return true
     end
@@ -2322,7 +2334,7 @@ function HasAuth(tradeType, userType)
         return false
     else
         DebugLog('Requiement is false for', userType)
-        return true
+        return hasPermission(userType)
     end
 end
 
@@ -2404,7 +2416,7 @@ function AttemptCreateUser(racerName, racerId, fobType, purchaseType)
 
             if nameIsNotTaken then
                 TriggerServerEvent('cw-racingapp:server:createRacerName', racerId, racerName, fobType, purchaseType,
-                    CurrentName)
+                    CurrentUserData.racername)
                 return true
             else
                 NotifyHandler(Lang("name_is_used") .. racerName, 'error')
@@ -2833,11 +2845,11 @@ function GetBaseDataObject()
         ghostingTimes = Config.Ghosting.Options,
         allowShare = Config.AllowCreateFromShare,
         racerNames = MyRacerNames,
-        currentRacerName = CurrentName,
-        currentRacerAuth = CurrentAuth,
-        currentCrewName = CurrentCrew,
-        currentRanking = CurrentRanking,
-        currentCrypto = CurrentCrypto,
+        currentRacerName = CurrentUserData.racername,
+        currentRacerAuth = CurrentUserData.auth,
+        currentCrewName = CurrentUserData.crew,
+        currentRanking = CurrentUserData.ranking,
+        currentCrypto = CurrentUserData.crypto or 0,
         isUsingRacingCrypto = Config.Payments.useRacingCrypto,
         cryptoConversionRate = Config.Options.conversionRate,
         allowBuyingCrypto = Config.Options.allowBuyingCrypto,
@@ -2845,7 +2857,7 @@ function GetBaseDataObject()
         allowTransferCrypto = Config.Options.allowTransferCrypto,
         showH2H = Config.ShowH2H,
         sellCharge = Config.Options.sellCharge,
-        auth = Config.Permissions[CurrentAuth],
+        auth = Config.Permissions[CurrentUserData.auth],
         hudSettings = Config.HUDSettings,
         translations = Config.Locale,
         primaryColor = Config.PrimaryUiColor,
@@ -2856,6 +2868,8 @@ function GetBaseDataObject()
         allAuthorities = Config.Permissions,
         dashboardSettings = Config.Dashboard,
         driftingIsEnabled = ConfigDrift.useDrift,
+        driftChallengeIsEnabled = ConfigDrift.useDriftChallenges,
+        driftChallengeSettings = ConfigDrift.driftChallengeSettings,
     }
     return setup
 end
@@ -2867,20 +2881,27 @@ RegisterNetEvent("cw-racingapp:client:notifyRacers", function(text)
 end)
 
 RegisterNetEvent("cw-racingapp:client:updateRanking", function(change, newRank)
-    CurrentRanking = newRank
     local type = 'success'
     if change < 0 then type = 'error' end
     NotifyHandler(Lang("rank_update") .. " " .. change .. ". " .. Lang("new_rank") .. newRank, type)
 end)
 
 function GetActiveRacerName()
+    local amountOfNames = 0
     for _, user in pairs(MyRacerNames) do
+        amountOfNames = amountOfNames + 1
         if user.active == 1 then return user end
+    end
+
+    if amountOfNames > 0 then
+        DebugLog('No active racer, returning first one')
+        cwCallback.await('cw-racingapp:server:setActiveRacerUser', MyRacerNames[1].racerid)
+        return MyRacerNames[1]
     end
 end
 
 RegisterNetEvent('cw-racingapp:client:setCurrentRacingCrew', function(crew)
-    CurrentCrew = crew
+    CurrentUserData.crew = crew
     if crew == nil then 
         NotifyHandler(Lang('left_crew'))
     end
@@ -2890,6 +2911,7 @@ RegisterNetEvent("cw-racingapp:client:updateRacerNames", function()
     Wait(2000)
     local playerNames = cwCallback.await('cw-racingapp:server:getRacerNamesByPlayer')
     MyRacerNames = playerNames
+    
     local currentRacer = GetActiveRacerName()
     DebugLog('Current racer after change', json.encode(currentRacer, { indent = true }))
     DebugLog('All player names', json.encode(MyRacerNames, { indent = true }))
@@ -2897,24 +2919,18 @@ RegisterNetEvent("cw-racingapp:client:updateRacerNames", function()
     if #MyRacerNames == 1 then
         currentRacer = MyRacerNames[1]
     end
-    if currentRacer then
-        CurrentName = currentRacer.racername
-        CurrentAuth = currentRacer.auth
-        CurrentRanking = currentRacer.ranking
-        CurrentCrypto = currentRacer.crypto
-        CurrentCrew = currentRacer.crew
-    end
+    CurrentUserData = currentRacer or {}
 
     NotifyHandler(Lang("user_list_updated"))
     DebugLog('current user', json.encode(currentRacer, { indent = true }))
-    if CurrentName and currentRacer and currentRacer.revoked == 1 then
+    if CurrentUserData.racername and currentRacer and currentRacer.revoked == 1 then
         NotifyHandler(Lang("revoked_access"), 'error')
         Wait(2000)
         if UiIsOpen then
             SendNUIMessage({ type = 'toggleApp', open = false })
             CloseUi()
         end
-    elseif CurrentName and not currentRacer then
+    elseif CurrentUserData.racername and not currentRacer then
         DebugLog('Race user was deleted')
         NotifyHandler(Lang('removed_user'), 'error')
         Wait(2000)

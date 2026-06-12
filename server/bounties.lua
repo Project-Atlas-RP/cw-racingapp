@@ -69,7 +69,7 @@ function GenerateBounties()
 end
 
 local function checkBountyCompletion(racerName, vehicleModel, rank, trackId, class, newTime, sprint, reversed)
-    DebugLog('^5Checking bounty for^0', racerName)
+    DebugLog('^5Checking bounty for^0', racerName, 'on track', trackId)
 
     for i, bounty in pairs(Bounties) do
         if bounty.trackId == trackId and bounty.maxClass == class then
@@ -108,7 +108,22 @@ BountyHandler = {
     checkBountyCompletion = checkBountyCompletion
 }
 
+local function srcCanHandleBounties(src)
+    local citizenId = getCitizenId(src)
+    if not citizenId then
+        return false
+    end
+
+    local raceUser = RADB.getActiveRacerName(citizenId)
+    local permissions = raceUser and Config.Permissions[raceUser.auth]
+    return permissions and permissions.handleBounties or false
+end
+
 RegisterNetEvent('cw-racingapp:server:rerollBounties', function()
+    if not srcCanHandleBounties(source) then
+        return
+    end
+
     GenerateBounties()
 end)
 

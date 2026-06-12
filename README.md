@@ -9,8 +9,10 @@
 - Host races
 - Buy-Ins
 - [Drift Races](#Drifting)
+- [Drift Challenges](#Drifting)
 - [Automated Races](#Automated-Races)
 - [Time Trial Bounties](#Time-Trial-Bounties)
+- [Item Payouts](#Item-Payouts)
 - Built in Crypto system
 - Buy-Ins and automated splits
 - Phasing/Ghosting
@@ -35,7 +37,10 @@
 
 > 5.0 was released on 27th Aug, 2025. It's HIGHLY encouraged to do a clean install for this version.
 
+> On translations: Only English is maintaned by devs. Other languages might be included, but not updated.
+
 > Do note, this script has TWO systems for participation money. Make sure to check the readme and read the comments regarding these and how to use them.
+
 
 # Links
 ### ⭐ Check out our [Tebex store](https://cw-scripts.tebex.io/category/2523396) for some cheap scripts ⭐
@@ -66,6 +71,7 @@
   - [Track Sharing](#track-sharing)
   - [Automated Races](#automated-races)
   - [Time Trial Bounties](#time-trial-bounties)
+  - [Item Payouts](#item-payouts)
   - [RacingApp Crypto [RAC]](#racingapp-crypto-rac)
   - [User Management](#user-management)
 - [Opening the Racing App](#opening-the-racing-app)
@@ -158,6 +164,17 @@ To install drifting:
 - Enable Racingapp in CW Driftings config
 - Enable Drifting in CW Racingapp drift config
 
+### Drift Challenges
+If you have drifting enabled you can also do drift challenges. These work like this:
+
+1. Racer A initializes a challenge.
+2. Everyone in the vicinity gets an invite.
+3. After a short time, the inivitation period is closed. Countdown starts.
+4. When countdown is done the challenge starts - racers must now get as high of a drift score in the alloted time as possible.
+5. Scoreboard is displayed when race finishes
+
+> Theres currently no buyin/betting for these in the app itself.
+
 ### Automated Races
 The script offers automated races. You can set these up in the config (`Config.AutomatedRaces`, `Config.AutomatedOptions`). If any of these are commented out/removed the automation will not start.
 
@@ -178,6 +195,30 @@ As of 16th November 2024 the script has customizable time trial bounties that pl
     },
 ```
 These are randomized upon server start (~5 seconds after script start/restart). You can modify how many of these are added in the Bounties Options. If your auth type has the `handleBounties` auth you should be able to re-roll the bounties from the bounties menu.
+
+### Item Payouts
+RacingApp supports awarding items to racers when they finish a race. The system uses **weighted random selection** from named item lists and configurable payout styles that determine which finishing positions receive items.
+
+All configuration lives in `shared/payouts.lua` under `Config.ItemPayouts`.
+
+**Quick overview:**
+- **`enabled`** — Master toggle. Set to `false` to disable all item payouts globally.
+- **`lists`** — Named tables of items (e.g. `'low'`, `'long_race'`). Each item has a `name`, a `weight` (higher = more likely), an optional `amount` range `{ min, max }`, and optional `metadata`.
+- **`styles`** — Named payout styles that control which positions get items. Built-in: `'all'` (every finisher), `'topThree'` (positions 1-3), `'onlyOne'` (winner only), `'custom'` (explicit position list).
+- **`default`** — Optional fallback that applies to **all** races automatically unless overridden. Includes a `minimumRaceLength` (meters) so short races can be excluded.
+
+**Per-race override:** When setting up a race (via UI or export), include `itemPayoutData` in the setup data:
+```lua
+itemPayoutData = {
+    itemList = 'long_race',   -- key from Config.ItemPayouts.lists
+    payoutStyle = 'topThree', -- key from Config.ItemPayouts.styles
+}
+```
+If a race has its own `itemPayoutData`, it takes priority over the default. If neither exists, no items are awarded.
+
+**Important:** Items are given via the `giveItem` bridge function. By default this uses `ox_inventory`. If you use a different inventory, update your framework's bridge file in `bridge/server/`.
+
+Races with item payouts show a purple box icon in the race listings UI.
 
 ### RacingApp Crypto [RAC]
 RacingApp has a built in crypto system tied to the racing user. To use this you can set your payment methods to `'racingcrypto'` and it will use the custom Racing Crypto System instead of your core payment system. The crypto is tied to a racinguser, so make sure you have a way to buy one of those with normal money if you don't want to have racing masters handle your users. 
@@ -511,6 +552,36 @@ RacingApp is built in VUE, this means you can't just edit the files directly. Th
 * [ox lib](https://github.com/overextended/ox_lib)
 
 # Updating?
+
+## 6.0 Drift Challenges
+This update comes with a change to how Racers table is handled.
+
+> If this it to complex for you, remove all Racingapp DB Tables and reinstall, and it will work. Probably the safer option, but you will lose tracks and racers.
+
+1. Run this SQL:
+```sql
+-- Add racerid column to race_tracks if it doesn't exist
+ALTER TABLE race_tracks
+    ADD COLUMN IF NOT EXISTS racerid VARCHAR(50) NOT NULL;
+
+-- Add racerid column to track_times if it doesn't exist
+ALTER TABLE track_times
+    ADD COLUMN IF NOT EXISTS racerid VARCHAR(50) NOT NULL;
+
+-- Add founder_racerid column to racing_crews if it doesn't exist
+ALTER TABLE racing_crews
+    ADD COLUMN IF NOT EXISTS founder_racerid VARCHAR(50) NULL DEFAULT NULL COLLATE 'utf8mb4_general_ci';
+
+ALTER TABLE racer_names
+    ADD COLUMN IF NOT EXISTS racerid VARCHAR(50) NOT NULL;
+```
+2. Enable commands in Config 
+```lua
+Config.EnableCommands = true
+```
+> Both the following commands need to be run on the server (So in your TXAdmin for example - CAN NOT BE RUN IN GAME)
+3. Run command `updateDatabaseWithRacerIds`. Wait it to print `[Racing] Migration complete!...`
+
 
 ## 5.1 Drift update
 New column added, run this in your db to update:

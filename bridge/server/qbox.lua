@@ -1,7 +1,11 @@
 if GetResourceState('qbx_core') ~= 'started' then return end
 
-exports.qbx_core:CreateUseableItem(Config.ItemName.gps, function(source, item)
-    openRacingApp(source)
+AddEventHandler('ox_inventory:usedItem', function(playerId, name, slotId, metadata)
+    if UseDebug then print('opening ui') end
+
+    if name == Config.ItemName.gps then
+        openRacingApp(playerId)
+    end
 end)
 
 -- Adds money to user
@@ -28,13 +32,33 @@ function canPay(src, moneyType, cost)
     return player.PlayerData.money[moneyType] >= cost
 end
 
+-- Gives an item to a player
+function giveItem(src, itemName, amount, metadata)
+    local player = exports.qbx_core:GetPlayer(tonumber(src))
+    if not player then return false end
+    return player.Functions.AddItem(itemName, amount, nil, metadata)
+end
+
 -- Fetches the CitizenId by Source
 function getCitizenId(src)
     local player = exports.qbx_core:GetPlayer(tonumber(src))
+    if not player then
+        print('^1[ERROR][cw-racingapp] getCitizenId: qbx_core:GetPlayer returned nil for src: ' .. tostring(src) .. '^0')
+        return nil
+    end
     return player.PlayerData.citizenid
 end
 
 -- Fetches the Source of an online player by citizenid
 function getSrcOfPlayerByCitizenId(citizenId)
-    return exports.qbx_core:GetPlayerByCitizenId(citizenId).PlayerData.source
+    if not citizenId then
+        print('^1[ERROR][cw-racingapp] getSrcOfPlayerByCitizenId: citizenId is nil^0')
+        return nil
+    end
+    local player = exports.qbx_core:GetPlayerByCitizenId(citizenId)
+    if not player then
+        print('^3[WARN][cw-racingapp] getSrcOfPlayerByCitizenId: no online player found for citizenId: ' .. tostring(citizenId) .. '^0')
+        return nil
+    end
+    return player.PlayerData.source
 end

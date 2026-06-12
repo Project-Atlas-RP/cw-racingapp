@@ -25,6 +25,28 @@ local function changeRacerCrew(src,racerName, selectedCrew)
     RADB.setActiveRacerCrew(racerName, selectedCrew)
 end
 
+local function getSourceCrewIdentity(src)
+    local citizenId = getCitizenId(src)
+    if not citizenId then
+        return nil
+    end
+
+    local raceUser = RADB.getActiveRacerName(citizenId)
+    if not raceUser or not raceUser.racername then
+        return nil
+    end
+
+    return {
+        citizenId = citizenId,
+        racerName = raceUser.racername,
+    }
+end
+
+local function getSourceActiveRacerName(src)
+    local identity = getSourceCrewIdentity(src)
+    return identity and identity.racerName or nil
+end
+
 -- SQL calling functions
 
 local function joinRacingCrew(memberName, citizenId, crewName)
@@ -245,9 +267,38 @@ local function canFounderDisbandCrew(founderCitizenId, crewName)
     return (crew and tostring(crew.founderCitizenid) == tostring(founderCitizenId)) or false
 end
 
+local function getCrewForSource(src)
+    local citizenId = getCitizenId(src)
+    if not citizenId then
+        return nil, nil
+    end
+
+    return citizenId, getRacingCrewThatCitizenIDIsIn(citizenId)
+end
+
+local function getCrewMemberByCitizenId(crewName, citizenId)
+    local crew = RacingCrews[crewName]
+    if not crew then
+        return nil
+    end
+
+    for _, member in ipairs(crew.members) do
+        if tostring(member.citizenID) == tostring(citizenId) then
+            return member
+        end
+    end
+
+    return nil
+end
+
 -- Events
 RegisterServerEvent('cw-racingapp:server:changeCrew', function(racerName, crewName)
-    changeRacerCrew(source, racerName, crewName)
+    local activeRacerName = getSourceActiveRacerName(source)
+    if not activeRacerName then
+        return
+    end
+
+    changeRacerCrew(source, activeRacerName, crewName)
 end)
 
 -- Callbacks
@@ -277,31 +328,56 @@ RegisterServerCallback('cw-racingapp:server:getAllCrews', function(source)
 end)
 
 RegisterServerCallback('cw-racingapp:server:sendInvite', function(source, invitedBySource, invitedCitizenId, crewName)
-    if useDebug then print(invitedBySource, ' is Inviting ', invitedCitizenId, ' to', crewName) end
-    return inviteToCrew(invitedBySource, invitedCitizenId, crewName)
+    local _, sourceCrew = getCrewForSource(source)
+    if not sourceCrew or sourceCrew.crewName ~= crewName then
+        return false
+    end
+
+    if useDebug then print(source, ' is Inviting ', invitedCitizenId, ' to', crewName) end
+    return inviteToCrew(source, invitedCitizenId, crewName)
 end)
 
 RegisterServerCallback('cw-racingapp:server:sendInviteClosest',
     function(source, invitedBySource, invitedSource, crewName)
+        local _, sourceCrew = getCrewForSource(source)
+        if not sourceCrew or sourceCrew.crewName ~= crewName then
+            return false
+        end
+
         local citizenId = getCitizenId(invitedSource)
         if not citizenId then return TriggerClientEvent('cw-racingapp:client:notify', source, Lang("person_no_exist"),
                 'error') end
 
-        if useDebug then print('Using Closest', invitedBySource, ' is Inviting ', citizenId, ' to', crewName) end
-        return inviteToCrew(invitedBySource, citizenId, crewName)
+        if useDebug then print('Using Closest', source, ' is Inviting ', citizenId, ' to', crewName) end
+        return inviteToCrew(source, citizenId, crewName)
     end)
 
 RegisterServerCallback('cw-racingapp:server:acceptInvite', function(source, racerName, invitedCitizenId)
-    if useDebug then print(invitedCitizenId, ' is joining a crew with racer name', racerName) end
-    return acceptInvite(racerName, invitedCitizenId)
+    local identity = getSourceCrewIdentity(source)
+    if not identity then
+        return false
+    end
+
+    if useDebug then print(identity.citizenId, ' is joining a crew with racer name', identity.racerName) end
+    return acceptInvite(identity.racerName, identity.citizenId)
 end)
 
 RegisterServerCallback('cw-racingapp:server:denyInvite', function(source, invitedCitizenId)
-    return denyInvite(invitedCitizenId)
+    local citizenId = getCitizenId(source)
+    if not citizenId then
+        return false
+    end
+
+    return denyInvite(citizenId)
 end)
 
 RegisterServerCallback('cw-racingapp:server:createCrew', function(source, founderName, founderCitizenId, crewName)
-    local canCreateCrew = canFounderCreateCrew(founderCitizenId)
+    local identity = getSourceCrewIdentity(source)
+    if not identity then
+        return false
+    end
+
+    local canCreateCrew = canFounderCreateCrew(identity.citizenId)
     local trimmedCrewName = string.gsub(crewName, '^%s*(.-)%s*$', '%1')
     if RacingCrews[trimmedCrewName] then
         TriggerClientEvent('cw-racingapp:client:notify', source, Lang("name_taken"), 'error')
@@ -310,7 +386,7 @@ RegisterServerCallback('cw-racingapp:server:createCrew', function(source, founde
     if canCreateCrew then
         if useDebug then print('Player can create ') end
 
-        return createRacingCrew(founderName, founderCitizenId, trimmedCrewName)
+        return createRacingCrew(identity.racerName, identity.citizenId, trimmedCrewName)
     else
         TriggerClientEvent('cw-racingapp:client:notify', source, Lang("disband_crew_first"), 'error')
     end
@@ -318,10 +394,15 @@ RegisterServerCallback('cw-racingapp:server:createCrew', function(source, founde
 end)
 
 RegisterServerCallback('cw-racingapp:server:joinCrew', function(source, memberName, citizenId, crewName)
-    local canJoinCrew = isMemberInCrew(citizenId, crewName)
+    local identity = getSourceCrewIdentity(source)
+    if not identity then
+        return false
+    end
+
+    local canJoinCrew = isMemberInCrew(identity.citizenId, crewName)
 
     if canJoinCrew then
-        return joinRacingCrew(memberName, citizenId, crewName)
+        return joinRacingCrew(identity.racerName, identity.citizenId, crewName)
     else
         print("Error: Member cannot join the crew")
     end
@@ -329,33 +410,51 @@ RegisterServerCallback('cw-racingapp:server:joinCrew', function(source, memberNa
 end)
 
 RegisterServerCallback('cw-racingapp:server:leaveCrew', function(source, memberName, citizenId, crewName)
+    local identity = getSourceCrewIdentity(source)
+    if not identity then
+        return false
+    end
+
     if not RacingCrews[crewName] then
         if useDebug then print('The racing crew did not exist') end
-        changeRacerCrew(source,memberName, nil)
+        changeRacerCrew(source, identity.racerName, nil)
     end
-    local canLeaveCrew = isMemberInCrew(citizenId, crewName)
-    local isFounder = canFounderDisbandCrew(citizenId, crewName)
+    local canLeaveCrew = isMemberInCrew(identity.citizenId, crewName)
+    local isFounder = canFounderDisbandCrew(identity.citizenId, crewName)
 
     if isFounder then
         TriggerClientEvent('cw-racingapp:client:notify', source, Lang("founder_can_not_leave"), 'error')
     end
     if canLeaveCrew then
-        changeRacerCrew(source,memberName, nil)
+        changeRacerCrew(source, identity.racerName, nil)
         Wait(500)
-        return leaveRacingCrew(citizenId, crewName)
+        return leaveRacingCrew(identity.citizenId, crewName)
     else
         if useDebug then print("Error: Member cannot leave the crew") end
-        changeRacerCrew(source,memberName, nil)
+        changeRacerCrew(source, identity.racerName, nil)
         return true
     end
 end)
 
 RegisterServerCallback('cw-racingapp:server:kickMemberFromCrew', function(source, memberName, citizenId, crewName)
+    local sourceCitizenId, sourceCrew = getCrewForSource(source)
+    if not sourceCitizenId or not sourceCrew or sourceCrew.crewName ~= crewName then
+        return false
+    end
+    if not canFounderDisbandCrew(sourceCitizenId, crewName) then
+        return false
+    end
+
+    local targetMember = getCrewMemberByCitizenId(crewName, citizenId)
+    if not targetMember then
+        return false
+    end
+
     if useDebug then print('member', memberName, 'is being kicked from', crewName) end
     local userCurrentSource = getSrcOfPlayerByCitizenId(citizenId)
     if not RacingCrews[crewName] then
         if useDebug then print('The racing crew did not exist') end
-        changeRacerCrew(userCurrentSource, memberName, nil)
+        changeRacerCrew(userCurrentSource, targetMember.racername, nil)
     end
     local canLeaveCrew = isMemberInCrew(citizenId, crewName)
     local isFounder = canFounderDisbandCrew(citizenId, crewName)
@@ -366,7 +465,7 @@ RegisterServerCallback('cw-racingapp:server:kickMemberFromCrew', function(source
     end
     if canLeaveCrew then
         if useDebug then print('Player can leave crew') end
-        changeRacerCrew(userCurrentSource, memberName, nil)
+        changeRacerCrew(userCurrentSource, targetMember.racername, nil)
         Wait(500)
         local leaveRes = leaveRacingCrew(citizenId, crewName)
         if useDebug then print('Leave Res:', leaveRes) end
@@ -376,14 +475,19 @@ RegisterServerCallback('cw-racingapp:server:kickMemberFromCrew', function(source
         return leaveRes
     else
         if useDebug then print("Error: Member cannot leave the crew") end
-        changeRacerCrew(userCurrentSource,memberName, nil)
+        changeRacerCrew(userCurrentSource, targetMember.racername, nil)
         return true
     end
 end)
 
 RegisterServerCallback('cw-racingapp:server:disbandCrew', function(source, founderCitizenId, crewName)
-    if useDebug then print(founderCitizenId, 'is disbanding crew', crewName) end
-    local canDisbandCrew = canFounderDisbandCrew(founderCitizenId, crewName)
+    local sourceCitizenId, sourceCrew = getCrewForSource(source)
+    if not sourceCitizenId or not sourceCrew or sourceCrew.crewName ~= crewName then
+        return false
+    end
+
+    if useDebug then print(sourceCitizenId, 'is disbanding crew', crewName) end
+    local canDisbandCrew = canFounderDisbandCrew(sourceCitizenId, crewName)
 
     if canDisbandCrew then
         return disbandRacingCrew(crewName)
@@ -420,9 +524,9 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
-if useDebug then
+if Config.EnableCommands then
     -- Debugging
-    registerCommand('createracingcrew', "Create a new racing crew", {
+    RegisterRacingAppCommand('createracingcrew', "Create a new racing crew", {
         { name = 'founder',   help = 'Founder name' },
         { name = 'citizenid', help = 'Citizen ID' },
         { name = 'crew',      help = 'Crew name' },
@@ -431,7 +535,7 @@ if useDebug then
         createRacingCrew(args[1], args[2], args[3])
     end, true)
     
-    registerCommand('joinracingcrew', "Join a racing crew", {
+    RegisterRacingAppCommand('joinracingcrew', "Join a racing crew", {
         { name = 'member',    help = 'Member name' },
         { name = 'citizenid', help = 'Citizen ID' },
         { name = 'crew',      help = 'Crew name' },
@@ -440,7 +544,7 @@ if useDebug then
         joinRacingCrew(args[1], args[2], args[3])
     end, true)
     
-    registerCommand('leaveracingcrew', "Leave a racing crew", {
+    RegisterRacingAppCommand('leaveracingcrew', "Leave a racing crew", {
         { name = 'citizenid', help = 'Citizen ID' },
         { name = 'crew',      help = 'Crew name' },
     }, true, function(source, args)
@@ -448,21 +552,21 @@ if useDebug then
         leaveRacingCrew(args[1], args[2])
     end, true)
     
-    registerCommand('addwintocrew', "Add a win to a racing crew", {
+    RegisterRacingAppCommand('addwintocrew', "Add a win to a racing crew", {
         { name = 'crew', help = 'Crew name' },
     }, true, function(source, args)
         print('Adding a win to racing crew', args[1])
         addWinToCrew(args[1])
     end, true)
     
-    registerCommand('addracetocrew', "Add a race to a racing crew", {
+    RegisterRacingAppCommand('addracetocrew', "Add a race to a racing crew", {
         { name = 'crew', help = 'Crew name' },
     }, true, function(source, args)
         print('Adding a race to racing crew', args[1])
         addRaceToCrew(args[1])
     end, true)
     
-    registerCommand('updateranking', "add/remove rank for a racing crew", {
+    RegisterRacingAppCommand('updateranking', "add/remove rank for a racing crew", {
         { name = 'crew',   help = 'Crew name' },
         { name = 'amount', help = 'How much do you want to increase/decrease with' },
     }, true, function(source, args)
@@ -470,19 +574,19 @@ if useDebug then
         updateRanking(args[1], args[2])
     end, true)
     
-    registerCommand('disbandracingcrew', "Disband a racing crew", {
+    RegisterRacingAppCommand('disbandracingcrew', "Disband a racing crew", {
         { name = 'crew', help = 'Crew name' },
     }, true, function(source, args)
         print('Disbanding racing crew', args[1])
         disbandRacingCrew(args[1])
     end, true)
     
-    registerCommand('printracingcrews', "Print racing crews", {
+    RegisterRacingAppCommand('printracingcrews', "Print racing crews", {
     }, true, function(source, args)
         print(json.encode(RacingCrews))
     end, true)
     
-    registerCommand('printinvites', "Print racing crews", {
+    RegisterRacingAppCommand('printinvites', "Print racing crews", {
     }, true, function(source, args)
         print(json.encode(ActiveInvites))
     end, true)

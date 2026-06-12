@@ -157,7 +157,7 @@ local function initRacingThread()
                     
                     if not hasFinished and distanceToFinish < maxDistance then
                         PlaySound(-1, "SELECT", "HUD_FRONTEND_DEFAULT_SOUNDSET", 0, 0, 1)
-                        TriggerServerEvent('cw-head2head:server:finishRacer', currentH2H.raceId, getCitizenId(), GetTimeDifference(GetGameTimer(), startTime) )
+                        TriggerServerEvent('cw-racingapp:h2h:server:finishRacer', currentH2H.raceId, getCitizenId(), GetTimeDifference(GetGameTimer(), startTime))
                         hasFinished = true
                         Countdown = 5
                         PlaySoundFrontend(-1, Config.Sounds.Finish.lib, Config.Sounds.Finish.sound)
@@ -179,16 +179,19 @@ local function isPlayerNearby(playerCoords, otherPlayerCoords, maxDistance)
 end
 
 local function inviteNearbyPlayers(raceId, amount)
+
+    DebugLog('[H2H] Inviting nearby players', raceId, amount)
+
     local playerPed = PlayerPedId()
     local playerCoords = GetEntityCoords(playerPed)
-    local vehicle = GetVehiclePedIsIn(playerPed, false)
 
     local nearbyPlayersFound = false
     for _, playerId in ipairs(GetActivePlayers()) do
         local otherPed = GetPlayerPed(playerId)
         local otherPlayerCoords = GetEntityCoords(otherPed)
         if playerPed ~= otherPed and isPlayerNearby(playerCoords, otherPlayerCoords, ConfigH2H.InviteDistance) then
-            TriggerServerEvent('cw-racingapp:h2h:server:invitePlayer', GetPlayerServerId(playerId), raceId, amount, CurrentName)
+            DebugLog(string.format('^2[H2H] Inviting player^0 %s (%d)', playerId, 'with server id', GetPlayerServerId(playerId)))
+            TriggerServerEvent('cw-racingapp:h2h:server:invitePlayer', GetPlayerServerId(playerId), raceId, amount, CurrentUserData?.racername or 'UNKNOWN')
             nearbyPlayersFound = true
         end
     end
@@ -294,7 +297,7 @@ local function setupHead2Head(data)
         DebugLog('[H2H] setting up race: $'..(data?.value or 0))
     end
     local citizenId = getCitizenId()
-    local racerName = CurrentName or 'UNKNOWN'
+    local racerName = CurrentUserData?.racername or 'UNKNOWN' or 'UNKNOWN'
     local startCoords = GetEntityCoords(GetPlayerPed(-1))
     local amount = data?.value or 0
     if useDebug then
@@ -306,7 +309,7 @@ local function setupHead2Head(data)
         local coord = Citizen.InvokeNative( 0xFA7C7F0AADF25D09, waypointBlip, Citizen.ResultAsVector( ) )
         finishCoords = vector3(coord.x,coord.y,coord.z)
     end
-    TriggerServerEvent('cw-racingapp:h2h:server:setupRace', citizenId, racerName, startCoords, amount, 'head2head', finishCoords)
+    TriggerServerEvent('cw-racingapp:h2h:server:setupRace', startCoords, amount)
     handleHighBeams()
 end
 

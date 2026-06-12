@@ -219,6 +219,11 @@ export type Vehicle = {
   class: string;
 }
 
+export type DriftChallengeSettings = {
+  length: number;
+  waitTime: number;
+  scoreBoardTimeout: number;
+}
 
 export type BaseData = {
   data: {
@@ -254,11 +259,12 @@ export type BaseData = {
     hideMap: boolean;
     hideH2h: boolean;
     allAuthorities:Record<string, Auth>;
-    dashboardSettings: DashboardSettings,
+    dashboardSettings: DashboardSettings;
     driftingIsEnabled: boolean;
-  };
+    driftChallengeIsEnabled: boolean;
+    driftChallengeSettings: DriftChallengeSettings;
+  }
 };
-
 export type Access = {
   race?: string;
 };
@@ -313,6 +319,7 @@ export type Race = {
   ParticipationAmount: number
   ParticipationCurrency: string
   ExpirationTime: number
+  ExpirationDuration?: number
   Disabled?: boolean
   Racers: number
   MaxClass: string
@@ -397,6 +404,40 @@ export type Head2headData = {
   invitee: string | undefined;
   current: Head2HeadCurrent;
 };
+
+export type DriftChallengeRacer = {
+  citizenId: string;
+  racerName: string;
+  source: number;
+};
+
+export type DriftChallengeCurrent = {
+  finishCoords: Coordinate[];
+  finished: boolean;
+  raceId: string;
+  racers: DriftChallengeRacer[];
+  started: boolean;
+};
+
+export type DriftChallengeData = {
+  latestChallengeId : string,
+  latestChallengerName : string,
+  activeChallengerName : string,
+  activeDriftChallengeId : string,
+};
+
+export type DriftChallengeRacerResult = {
+  RacerSource: number;
+  RacerName: string;
+  DriftScore: number;
+  Finished?: boolean;
+}
+
+export type DriftChallengeResults = {
+  winner: number;
+  highestScore: number;
+  scores: DriftChallengeRacerResult[];
+}
 
 export type TrackRaceStats = {
   trackId: string;
